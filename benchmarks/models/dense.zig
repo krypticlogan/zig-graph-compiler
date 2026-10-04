@@ -1,6 +1,8 @@
 const std = @import("std");
 const zgc = @import("zgc");
 
+const nn = zgc.ext.nn;
+
 const Sources = enum(usize) {
     input,
     w1,
@@ -13,7 +15,7 @@ const Sources = enum(usize) {
     b4,
 };
 
-const Activation = zgc.nn.Activation;
+const Activation = nn.Activation;
 const weight_keys = [_]Sources{ .w1, .w2, .w3, .w4 };
 const bias_keys = [_]Sources{ .b1, .b2, .b3, .b4 };
 
@@ -37,7 +39,7 @@ fn DenseBenchmark(
         .max_input_refs = layer_count * 5,
         .max_outputs = 1,
     });
-    const Dense = zgc.nn.Dense(Sources);
+    const Dense = nn.Dense(Sources);
     const Network = comptime network: {
         var layers: [layer_count]Dense = undefined;
         for (0..layer_count) |layer| {
@@ -48,7 +50,7 @@ fn DenseBenchmark(
                 .activation = activations[layer],
             };
         }
-        break :network zgc.nn.Sequential(layers);
+        break :network nn.Sequential(layers);
     };
     const definition = definition: {
         var builder = Definition.init();
@@ -56,7 +58,7 @@ fn DenseBenchmark(
         builder.output(Network.apply(&builder, input));
         break :definition builder.finish();
     };
-    const Model = definition.modelWith(&.{.{ .source = .input, .binding = zgc.Source.bound }});
+    const Model = definition.modelWith(&.{.{ .source = .input, .binding = zgc.memory.Source.bound }});
     const input_element_count = batch_size * sizes[0];
     const output_element_count = batch_size * sizes[sizes.len - 1];
     const parameters = parameterCount(sizes);

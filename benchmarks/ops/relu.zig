@@ -32,13 +32,13 @@ fn ReluBenchmark(
         }
 
         pub fn run(self: *Self, run_iterations: usize) void {
-            const input: zgc.Tensor.ConstView(f32, 1) = .{
+            const input: zgc.core.Tensor.ConstView(f32, 1) = .{
                 .storage = &self.input_data,
                 .shape = .{element_count},
                 .strides = .{1},
                 .offset = 0,
             };
-            const output: zgc.Tensor.View(f32, 1) = .{
+            const output: zgc.core.Tensor.View(f32, 1) = .{
                 .storage = &self.output_data,
                 .shape = .{element_count},
                 .strides = .{1},

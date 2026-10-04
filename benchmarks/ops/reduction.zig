@@ -37,14 +37,14 @@ fn ReductionBenchmark(
         }
 
         pub fn run(self: *Self, iterations: usize) void {
-            const input: zgc.Tensor.ConstView(f32, 2) = .{
+            const input: zgc.core.Tensor.ConstView(f32, 2) = .{
                 .storage = &self.input_storage,
                 .shape = .{ rows, columns },
                 .strides = if (layout == .contiguous) .{ columns, 1 } else .{ 1, rows },
                 .offset = 0,
             };
             if (comptime operation == .sum) {
-                const output: zgc.Tensor.View(f32, 1) = .{
+                const output: zgc.core.Tensor.View(f32, 1) = .{
                     .storage = &self.output_storage,
                     .shape = .{rows},
                     .strides = .{1},
@@ -56,7 +56,7 @@ fn ReductionBenchmark(
                     std.mem.doNotOptimizeAway(&self.output_storage);
                 }
             } else {
-                const output: zgc.Tensor.View(f32, 2) = .{
+                const output: zgc.core.Tensor.View(f32, 2) = .{
                     .storage = &self.output_storage,
                     .shape = .{ rows, columns },
                     .strides = .{ columns, 1 },
@@ -104,13 +104,13 @@ fn SmallSoftmaxBenchmark(
         }
 
         pub fn run(self: *Self, iterations: usize) void {
-            const input: zgc.Tensor.ConstView(f32, 2) = .{
+            const input: zgc.core.Tensor.ConstView(f32, 2) = .{
                 .storage = &self.input_storage,
                 .shape = .{ 1, columns_small },
                 .strides = .{ columns_small, 1 },
                 .offset = 0,
             };
-            const output: zgc.Tensor.View(f32, 2) = .{
+            const output: zgc.core.Tensor.View(f32, 2) = .{
                 .storage = &self.output_storage,
                 .shape = .{ 1, columns_small },
                 .strides = .{ columns_small, 1 },

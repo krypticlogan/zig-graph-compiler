@@ -40,25 +40,25 @@ fn MatmulBenchmark(
         }
 
         pub fn run(self: *Self, run_iterations: usize) void {
-            const lhs: zgc.Tensor.ConstView(f32, 2) = .{
+            const lhs: zgc.core.Tensor.ConstView(f32, 2) = .{
                 .storage = &self.lhs_storage,
                 .shape = .{ m, k_len },
                 .strides = if (lhs_layout == .contiguous) .{ k_len, 1 } else .{ 1, m },
                 .offset = 0,
             };
-            const rhs: zgc.Tensor.ConstView(f32, 2) = .{
+            const rhs: zgc.core.Tensor.ConstView(f32, 2) = .{
                 .storage = &self.rhs_storage,
                 .shape = .{ k_len, n },
                 .strides = if (rhs_layout == .contiguous) .{ n, 1 } else .{ 1, k_len },
                 .offset = 0,
             };
-            const output: zgc.Tensor.View(f32, 2) = .{
+            const output: zgc.core.Tensor.View(f32, 2) = .{
                 .storage = &self.output_storage,
                 .shape = .{ m, n },
                 .strides = if (output_layout == .contiguous) .{ n, 1 } else .{ 1, m },
                 .offset = 0,
             };
-            const op: zgc.Op = .{ .compute = .{ .matmul = .{ .strategy = .output_columns } } };
+            const op: zgc.Op = .{ .compute = .matmul };
             for (0..run_iterations) |_| {
                 op.execute(.{ lhs, rhs }, output);
                 std.mem.doNotOptimizeAway(&self.output_storage);
