@@ -310,7 +310,7 @@ pub fn FusionCandidates(comptime node_count: usize) type {
         const Self = @This();
         pub const max_count = 2;
 
-        values: [max_count]?FusionCandidate(node_count) = .{null} ** max_count,
+        values: [max_count]?FusionCandidate(node_count) = @splat(null),
         count: usize = 0,
 
         fn add(candidates: *Self, candidate: FusionCandidate(node_count)) void {
@@ -322,9 +322,9 @@ pub fn FusionCandidates(comptime node_count: usize) type {
 
 pub fn FusionSelection(comptime node_count: usize) type {
     return struct {
-        reduction_storage: [node_count]?Group(node_count) = .{null} ** node_count,
-        map_storage: [node_count]?MapGroup(node_count) = .{null} ** node_count,
-        node_region: [node_count]?FusionRegionRef = .{null} ** node_count,
+        reduction_storage: [node_count]?Group(node_count) = @splat(null),
+        map_storage: [node_count]?MapGroup(node_count) = @splat(null),
+        node_region: [node_count]?FusionRegionRef = @splat(null),
         region_count: usize = 0,
         map_count: usize = 0,
     };
@@ -345,7 +345,7 @@ pub fn Group(comptime node_count: usize) type {
         descriptor: Reduction.Descriptor,
         domain_tensor: usize,
         anchor_tensor: usize,
-        reduction_nodes: [node_count]?usize = .{null} ** node_count,
+        reduction_nodes: [node_count]?usize = @splat(null),
         reduction_count: usize = 0,
         nodes: [node_count]bool = @splat(false),
         emit_node: usize = 0,

@@ -608,7 +608,7 @@ pub fn DefinitionBuilder(comptime SourceKey: type, comptime limits: Limits) type
             }
             if (self.definition.tensor_count == limits.max_tensors) @compileError("definition exceeds max_tensors");
 
-            const source_index: usize = @intCast(@intFromEnum(source_key));
+            const source_index: usize = @intCast(@backingInt(source_key));
             if (self.used_sources[source_index]) @compileError("a source key may only be defined once");
             self.used_sources[source_index] = true;
 
@@ -724,9 +724,9 @@ fn enumCapacity(comptime Enum: type) usize {
     const info = @typeInfo(Enum);
     if (info != .@"enum") @compileError("DefinitionBuilder source keys must be an enum type");
     var capacity: usize = 0;
-    for (info.@"enum".fields) |field| {
-        if (field.value < 0) @compileError("source enum values must be non-negative");
-        capacity = @max(capacity, @as(usize, @intCast(field.value)) + 1);
+    for (info.@"enum".field_values) |field_value| {
+        if (field_value < 0) @compileError("source enum values must be non-negative");
+        capacity = @max(capacity, @as(usize, @intCast(field_value)) + 1);
     }
     return capacity;
 }

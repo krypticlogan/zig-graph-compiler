@@ -212,7 +212,7 @@ pub fn Model(
                     const tensor_id = graph.input_refs[node.input_start + input_index].?;
                     input_types[input_index] = Validated.ConstView(tensor_id);
                 }
-                break :blk std.meta.Tuple(&input_types);
+                break :blk @Tuple(&input_types);
             };
 
             var inputs: InputViews = undefined;
@@ -227,7 +227,7 @@ pub fn Model(
                     const tensor_id = graph.output_refs[node.output_start + output_index].?;
                     output_types[output_index] = Validated.View(tensor_id);
                 }
-                break :blk std.meta.Tuple(&output_types);
+                break :blk @Tuple(&output_types);
             };
             var outputs: OutputViews = undefined;
             inline for (0..node.output_count) |output_index| {
@@ -312,7 +312,7 @@ pub fn Model(
         }
 
         fn sourceIndex(comptime source_key: SourceKey) usize {
-            const source_id: usize = @intCast(@intFromEnum(source_key));
+            const source_id: usize = @intCast(@backingInt(source_key));
             if (source_id >= graph.sources.len or graph.sources[source_id] == null) {
                 @compileError("the graph does not contain the provided source key");
             }

@@ -193,7 +193,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
         const Self = @This();
         pub const Candidate = PlanCandidate(capacity);
 
-        candidates: [max_candidates]?Candidate = .{null} ** max_candidates,
+        candidates: [max_candidates]?Candidate = @splat(null),
         count: usize = 0,
 
         /// Insert one completed candidate while retaining only the Pareto

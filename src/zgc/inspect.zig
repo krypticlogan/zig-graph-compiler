@@ -230,10 +230,10 @@ pub fn runModuleCli(
     }
 
     if (requested_model) |name| {
-        inline for (@typeInfo(ModelModule).@"struct".decls) |declaration| {
-            const Candidate = @field(ModelModule, declaration.name);
+        inline for (@typeInfo(ModelModule).@"struct".decl_names) |declaration_name| {
+            const Candidate = @field(ModelModule, declaration_name);
             if (comptime isInspectableModel(Candidate)) {
-                if (std.mem.eql(u8, name, declaration.name)) {
+                if (std.mem.eql(u8, name, declaration_name)) {
                     return runCli(Candidate, command_args, writer);
                 }
             }
@@ -245,8 +245,8 @@ pub fn runModuleCli(
     }
 
     if (model_count == 1) {
-        inline for (@typeInfo(ModelModule).@"struct".decls) |declaration| {
-            const Candidate = @field(ModelModule, declaration.name);
+        inline for (@typeInfo(ModelModule).@"struct".decl_names) |declaration_name| {
+            const Candidate = @field(ModelModule, declaration_name);
             if (comptime isInspectableModel(Candidate)) {
                 return runCli(Candidate, command_args, writer);
             }
@@ -346,18 +346,19 @@ pub fn writeCliUsage(writer: *Writer) Writer.Error!void {
 pub fn writeModuleCliUsage(comptime ModelModule: type, writer: *Writer) Writer.Error!void {
     try writeCliUsage(writer);
     try writer.writeAll("\ninspectable model declarations:\n");
-    inline for (@typeInfo(ModelModule).@"struct".decls) |declaration| {
-        const Candidate = @field(ModelModule, declaration.name);
+    inline for (@typeInfo(ModelModule).@"struct".decl_names) |declaration_name| {
+        const Candidate = @field(ModelModule, declaration_name);
         if (comptime isInspectableModel(Candidate)) {
-            try writer.print("  {s}\n", .{declaration.name});
+            try writer.print("  {s}\n", .{declaration_name});
         }
     }
 }
 
 fn inspectableModelCount(comptime ModelModule: type) usize {
     var count: usize = 0;
-    for (@typeInfo(ModelModule).@"struct".decls) |declaration| {
-        if (isInspectableModel(@field(ModelModule, declaration.name))) count += 1;
+    const info = @typeInfo(ModelModule).@"struct";
+    for (info.decl_names) |declaration| {
+        if (isInspectableModel(@field(ModelModule, declaration))) count += 1;
     }
     return count;
 }

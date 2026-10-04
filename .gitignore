@@ -15,3 +15,5 @@ playground
 /examples/fluid-dynamics/src/benchmark.zig
 /examples/fluid-dynamics/src/lbm-benchmark.zig
 /examples/fluid-dynamics/src/lbm-direct.zig
+/examples/fluid-dynamics/src/lbm-compare.zig
+/examples/fluid-dynamics/src/lbm-model-legacy.zig

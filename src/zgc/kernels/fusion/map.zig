@@ -104,13 +104,13 @@ fn resolveVector(
 fn ScalarValues(comptime program: ElementwiseProgram) type {
     var types: [program.instructions.len]type = undefined;
     for (program.instructions, 0..) |instruction, index| types[index] = instruction.dtype.Scalar();
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn VectorValues(comptime program: ElementwiseProgram, comptime vector_len: usize) type {
     var types: [program.instructions.len]type = undefined;
     for (program.instructions, 0..) |instruction, index| types[index] = instruction.dtype.Vector(vector_len);
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn ScalarParams(comptime program: ElementwiseProgram, comptime Inputs: type, comptime instruction: ElementwiseProgram.Instruction) type {
@@ -118,7 +118,7 @@ fn ScalarParams(comptime program: ElementwiseProgram, comptime Inputs: type, com
     for (instruction.args[0..types.len], 0..) |reference, index| {
         types[index] = ScalarReferenceType(program, Inputs, reference);
     }
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn VectorParams(
@@ -131,7 +131,7 @@ fn VectorParams(
     for (instruction.args[0..types.len], 0..) |reference, index| {
         types[index] = VectorReferenceType(program, Inputs, reference, vector_len);
     }
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn ScalarReferenceType(
@@ -140,7 +140,7 @@ fn ScalarReferenceType(
     comptime reference: ElementwiseProgram.ValueRef,
 ) type {
     return switch (reference) {
-        .input => |input_index| std.meta.fields(Inputs)[input_index].type.scalar_type,
+        .input => |input_index| @typeInfo(Inputs).@"struct".field_types[input_index].scalar_type,
         .instruction => |instruction_index| program.instructions[instruction_index].dtype.Scalar(),
         .accumulator => @compileError("map expressions cannot reference accumulators"),
     };
@@ -153,7 +153,7 @@ fn VectorReferenceType(
     comptime vector_len: usize,
 ) type {
     return switch (reference) {
-        .input => |input_index| std.meta.fields(Inputs)[input_index].type.dtype.Vector(vector_len),
+        .input => |input_index| @typeInfo(Inputs).@"struct".field_types[input_index].dtype.Vector(vector_len),
         .instruction => |instruction_index| program.instructions[instruction_index].dtype.Vector(vector_len),
         .accumulator => @compileError("map expressions cannot reference accumulators"),
     };
@@ -161,8 +161,8 @@ fn VectorReferenceType(
 
 fn canUseContiguousVectors(comptime Inputs: type, comptime Output: type) bool {
     if (!Output.static_is_contiguous) return false;
-    inline for (std.meta.fields(Inputs)) |field| {
-        const View = @TypeOf(@as(field.type, undefined).broadcastTo(Output.rank, Output.static_shape));
+    inline for (@typeInfo(Inputs).@"struct".field_types) |Input| {
+        const View = @TypeOf(@as(Input, undefined).broadcastTo(Output.rank, Output.static_shape));
         if (!View.static_is_contiguous) return false;
     }
     return true;

@@ -85,16 +85,16 @@ fn concatStrided(
 
 fn usesStaticContiguousCopies(comptime Inputs: type, comptime Output: type) bool {
     if (!allGeometryIsStatic(Inputs, Output) or !Output.static_is_contiguous) return false;
-    inline for (std.meta.fields(Inputs)) |field| {
-        if (!field.type.static_is_contiguous) return false;
+    inline for (@typeInfo(Inputs).@"struct".field_types) |Input| {
+        if (!Input.static_is_contiguous) return false;
     }
     return true;
 }
 
 fn allGeometryIsStatic(comptime Inputs: type, comptime Output: type) bool {
     if (!hasStaticGeometry(Output)) return false;
-    inline for (std.meta.fields(Inputs)) |field| {
-        if (!hasStaticGeometry(field.type)) return false;
+    inline for (@typeInfo(Inputs).@"struct".field_types) |Input| {
+        if (!hasStaticGeometry(Input)) return false;
     }
     return true;
 }

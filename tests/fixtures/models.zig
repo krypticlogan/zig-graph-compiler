@@ -11,7 +11,7 @@ pub const BasicModel = model: {
     break :model builder.finish().model();
 };
 
-const FullSources = enum(usize) {};
+const FullSources = enum(noreturn) {};
 const FullDefinition = zgc.DefinitionBuilder(FullSources, .{ .max_rank = 2, .max_nodes = 1, .max_tensors = 2, .max_input_refs = 1, .max_outputs = 1 });
 pub const FullModel = model: {
     var builder = FullDefinition.init();
