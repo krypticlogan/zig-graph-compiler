@@ -179,6 +179,10 @@ pub fn MemoryPlan(
     var planner: ReusePlanner(g.tensor_ct) = .{};
 
     var max_alignment: usize = 1;
+
+    // Sources are populated before execution and retain their values for the
+    // entire run. Reserve all owned source storage before making any region
+    // available to computed tensors, regardless of tensor insertion order.
     for (0..g.tensor_ct) |tensor_id| {
         if (comptime @hasField(@TypeOf(g), "materialized")) {
             if (!g.materialized[tensor_id]) continue;
@@ -186,9 +190,15 @@ pub fn MemoryPlan(
         const tensor_info = g.tensors[tensor_id].?;
         if (tensor_info.storage_tensor != tensor_id) continue;
         if (!SourcePlan.isOwned(tensor_info)) continue;
+        switch (tensor_info.origin) {
+            .source => {},
+            .node, .literal => continue,
+        }
 
         const lifetime = lifetime_analysis.tensor_lifetimes[tensor_id];
-        planner.releaseBefore(lifetime.begin_node);
+        if (lifetime.end_node_exclusive != null) {
+            @compileError("owned source storage must remain persistent");
+        }
         const dtype = tensor_info.dtype;
         const alignment = dtype.alignment();
         const len_bytes = tensor_info.shape.elementCount() * dtype.byteSize();
@@ -196,6 +206,35 @@ pub fn MemoryPlan(
         memory_plan[tensor_id] = region;
         planner.track(tensor_id, region, lifetime.end_node_exclusive);
         max_alignment = @max(max_alignment, alignment);
+    }
+
+    // Node results may reuse storage once an earlier computed lifetime ends.
+    // Allocate in execution order rather than tensor insertion order so that
+    // releaseBefore only advances through time.
+    for (0..g.node_ct) |begin_node| {
+        planner.releaseBefore(begin_node);
+        for (0..g.tensor_ct) |tensor_id| {
+            if (comptime @hasField(@TypeOf(g), "materialized")) {
+                if (!g.materialized[tensor_id]) continue;
+            }
+            const tensor_info = g.tensors[tensor_id].?;
+            if (tensor_info.storage_tensor != tensor_id) continue;
+            if (!SourcePlan.isOwned(tensor_info)) continue;
+            switch (tensor_info.origin) {
+                .node => {},
+                .source, .literal => continue,
+            }
+
+            const lifetime = lifetime_analysis.tensor_lifetimes[tensor_id];
+            if (lifetime.begin_node != begin_node) continue;
+            const dtype = tensor_info.dtype;
+            const alignment = dtype.alignment();
+            const len_bytes = tensor_info.shape.elementCount() * dtype.byteSize();
+            const region = planner.allocate(len_bytes, alignment);
+            memory_plan[tensor_id] = region;
+            planner.track(tensor_id, region, lifetime.end_node_exclusive);
+            max_alignment = @max(max_alignment, alignment);
+        }
     }
 
     for (0..g.tensor_ct) |tensor_id| {

@@ -94,3 +94,44 @@ test "memory plan grows when no free span fits" {
     try std.testing.expectEqual(@as(usize, 36), regions[5].?.offset);
     try std.testing.expectEqual(@as(usize, 76), Model.memory_plan.byte_count);
 }
+
+test "owned sources are reserved before reusable computed storage" {
+    const Sources = enum(usize) { input, bias };
+    const Definition = zgc.DefinitionBuilder(Sources, .{
+        .max_rank = 1,
+        .max_nodes = 4,
+        .max_tensors = 6,
+        .max_input_refs = 5,
+        .max_outputs = 1,
+    });
+    const definition = comptime blk: {
+        var builder = Definition.init();
+        const input = builder.input(.input, .f32, &.{8});
+        const wide_temporary = builder.copy(input);
+        const reduced = builder.sum(wide_temporary, .{ .axes = &.{0} });
+        const narrow_temporary = builder.relu(reduced);
+        const late_bias = builder.parameter(.bias, .f32, &.{1});
+        builder.output(builder.add(narrow_temporary, late_bias));
+        break :blk builder.finish();
+    };
+    const Model = definition.modelWith(&.{
+        .{ .source = .input, .binding = zgc.memory.Source.bound },
+    });
+    const regions = Model.memory_plan.tensor_regions;
+    const bias_region = regions[4].?;
+
+    for (regions, 0..) |maybe_region, tensor_id| {
+        if (tensor_id == 4) continue;
+        const region = maybe_region orelse continue;
+        try std.testing.expect(
+            region.offset + region.len_bytes <= bias_region.offset or
+                bias_region.offset + bias_region.len_bytes <= region.offset,
+        );
+    }
+
+    var model = Model.init();
+    try model.bindInput(.input, &.{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    try model.copySource(.bias, &.{10});
+    model.run();
+    try std.testing.expectEqual(@as(f32, 46), model.outputView(0).get(.{0}));
+}
