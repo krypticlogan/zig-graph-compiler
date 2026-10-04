@@ -27,7 +27,7 @@ test "persistent outputs retain distinct regions" {
         break :blk builder.finish();
     };
     const Model = definition.modelWith(&.{
-        .{ .source = .input, .binding = zgc.Source.bound },
+        .{ .source = .input, .binding = zgc.memory.Source.bound },
     });
     const regions = Model.memory_plan.tensor_regions;
 
@@ -54,7 +54,7 @@ test "memory plan splits and coalesces free spans" {
         break :blk builder.finish();
     };
     const Model = definition.modelWith(&.{
-        .{ .source = .input, .binding = zgc.Source.bound },
+        .{ .source = .input, .binding = zgc.memory.Source.bound },
     });
     const regions = Model.memory_plan.tensor_regions;
 
@@ -85,8 +85,8 @@ test "memory plan grows when no free span fits" {
         break :blk builder.finish();
     };
     const Model = definition.modelWith(&.{
-        .{ .source = .small_input, .binding = zgc.Source.bound },
-        .{ .source = .large_input, .binding = zgc.Source.bound },
+        .{ .source = .small_input, .binding = zgc.memory.Source.bound },
+        .{ .source = .large_input, .binding = zgc.memory.Source.bound },
     });
     const regions = Model.memory_plan.tensor_regions;
 

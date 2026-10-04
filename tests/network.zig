@@ -1,6 +1,6 @@
 const std = @import("std");
 const zgc = @import("zgc");
-
+const nn = zgc.ext.nn;
 const Sources = enum(usize) { input, w1, b1, w2, b2 };
 const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_rank = 2,
@@ -9,8 +9,8 @@ const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_input_refs = 10,
     .max_outputs = 1,
 });
-const Dense = zgc.nn.Dense(Sources);
-const Classifier = zgc.nn.Sequential(&[_]Dense{
+const Dense = nn.Dense(Sources);
+const Classifier = nn.Sequential(&[_]Dense{
     .{
         .weights = .w1,
         .bias = .b1,
@@ -39,7 +39,10 @@ test "dense layers build a sequential core graph" {
     try std.testing.expectEqual(@as(usize, 6), Model.semantic_graph.node_ct);
     try std.testing.expectEqual(@as(usize, 5), graph.node_ct);
     switch (graph.nodes[1].?.op.compute.kernel) {
-        .map => |plan| try std.testing.expectEqual(@as(usize, 2), plan.region.expressions.instructions.len),
+        .map => |plan| try std.testing.expectEqual(
+            @as(usize, 2),
+            plan.region.body.expression.instructions.len,
+        ),
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqualSlices(
@@ -48,8 +51,8 @@ test "dense layers build a sequential core graph" {
         graph.tensors[graph.outputs[0].?].?.shape.slice(),
     );
     try std.testing.expectEqual(@as(usize, 2), Classifier.layer_count);
-    try std.testing.expectEqual(zgc.nn.Activation.relu, Classifier.layer_definitions[0].activation);
-    try std.testing.expectEqual(zgc.nn.Activation.softmax, Classifier.layer_definitions[1].activation);
+    try std.testing.expectEqual(nn.Activation.relu, Classifier.layer_definitions[0].activation);
+    try std.testing.expectEqual(nn.Activation.softmax, Classifier.layer_definitions[1].activation);
 }
 
 test "dense sequential model executes through core kernels" {
@@ -82,7 +85,7 @@ test "dense output-input weights create an aliasing transpose" {
         .max_input_refs = 5,
         .max_outputs = 1,
     });
-    const OutputMajorDense = zgc.nn.Dense(LayoutSources);
+    const OutputMajorDense = nn.Dense(LayoutSources);
     const layout_definition = comptime blk: {
         var builder = LayoutDefinition.init();
         const input = builder.input(.input, .f32, &.{ 1, 3 });
@@ -102,14 +105,16 @@ test "dense output-input weights create an aliasing transpose" {
     try std.testing.expectEqual(graph.tensors[1].?.storage_tensor, graph.tensors[2].?.storage_tensor);
 }
 
+
+const img = zgc.ext.img;
 test "image helpers declare channel-aware core inputs" {
     try std.testing.expectEqual(
         [4]usize{ 2, 28, 28, 3 },
-        (zgc.img.Dimensions{ .batch = 2, .height = 28, .width = 28, .channels = 3 }).shape(),
+        (img.Dimensions{ .batch = 2, .height = 28, .width = 28, .channels = 3 }).shape(),
     );
     try std.testing.expectEqual(
         [4]usize{ 2, 3, 28, 28 },
-        (zgc.img.Dimensions{
+        (img.Dimensions{
             .batch = 2,
             .height = 28,
             .width = 28,
@@ -125,7 +130,7 @@ test "image helpers declare channel-aware core inputs" {
     });
     const image_definition = comptime blk: {
         var builder = ImageDefinition.init();
-        const image = zgc.img.input(
+        const image = img.input(
             &builder,
             .image,
             .f32,

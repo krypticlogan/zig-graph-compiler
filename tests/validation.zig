@@ -2,14 +2,14 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const CountedValue = struct {
-    dtype: zgc.Dtype,
+    dtype: zgc.memory.Dtype,
     rank: usize,
 };
 
 fn ShapedValue(comptime max_rank: usize) type {
     return struct {
-        dtype: zgc.Dtype,
-        shape: zgc.Tensor.Shape(max_rank),
+        dtype: zgc.memory.Dtype,
+        shape: zgc.core.Tensor.Shape(max_rank),
     };
 }
 
@@ -20,8 +20,8 @@ test "validation reads rank metadata from both graph passes" {
         .shape = .init(&.{ 2, 3, 4 }),
     };
 
-    try std.testing.expectEqual(@as(usize, 3), zgc.Validation.rankOf(counted));
-    try std.testing.expectEqual(@as(usize, 3), zgc.Validation.rankOf(shaped));
+    try std.testing.expectEqual(@as(usize, 3), zgc.compiler.Validation.rankOf(counted));
+    try std.testing.expectEqual(@as(usize, 3), zgc.compiler.Validation.rankOf(shaped));
 }
 
 test "validation checks arity ranks and dtypes" {
@@ -36,18 +36,18 @@ test "validation checks arity ranks and dtypes" {
     const integer = CountedValue{ .dtype = .i8, .rank = 1 };
     const boolean = CountedValue{ .dtype = .bool, .rank = 1 };
 
-    try std.testing.expect(zgc.Validation.inputCountIs(&inputs, 2));
-    try std.testing.expect(zgc.Validation.ranksAre(&inputs, &.{ 2, 2 }));
-    try std.testing.expect(zgc.Validation.ranksMatch(&inputs));
-    try std.testing.expect(zgc.Validation.dtypesMatch(&inputs));
-    try std.testing.expect(!zgc.Validation.ranksMatch(&mismatched));
-    try std.testing.expect(!zgc.Validation.dtypesMatch(&mismatched));
-    try std.testing.expect(zgc.Validation.dtypeKindIs(inputs[0], .float));
-    try std.testing.expect(!zgc.Validation.dtypeKindIs(integer, .float));
-    try std.testing.expect(zgc.Validation.dtypeKindIs(boolean, .boolean));
-    try std.testing.expect(zgc.Validation.dtypeIsNumeric(inputs[0]));
-    try std.testing.expect(zgc.Validation.dtypeIsNumeric(integer));
-    try std.testing.expect(!zgc.Validation.dtypeIsNumeric(boolean));
+    try std.testing.expect(zgc.compiler.Validation.inputCountIs(&inputs, 2));
+    try std.testing.expect(zgc.compiler.Validation.ranksAre(&inputs, &.{ 2, 2 }));
+    try std.testing.expect(zgc.compiler.Validation.ranksMatch(&inputs));
+    try std.testing.expect(zgc.compiler.Validation.dtypesMatch(&inputs));
+    try std.testing.expect(!zgc.compiler.Validation.ranksMatch(&mismatched));
+    try std.testing.expect(!zgc.compiler.Validation.dtypesMatch(&mismatched));
+    try std.testing.expect(zgc.compiler.Validation.dtypeKindIs(inputs[0], .float));
+    try std.testing.expect(!zgc.compiler.Validation.dtypeKindIs(integer, .float));
+    try std.testing.expect(zgc.compiler.Validation.dtypeKindIs(boolean, .boolean));
+    try std.testing.expect(zgc.compiler.Validation.dtypeIsNumeric(inputs[0]));
+    try std.testing.expect(zgc.compiler.Validation.dtypeIsNumeric(integer));
+    try std.testing.expect(!zgc.compiler.Validation.dtypeIsNumeric(boolean));
 }
 
 test "validation checks shapes extents and axes" {
@@ -56,13 +56,13 @@ test "validation checks shapes extents and axes" {
     const same = Value{ .dtype = .f32, .shape = .init(&.{ 3, 4 }) };
     const rhs = Value{ .dtype = .f32, .shape = .init(&.{ 4, 7 }) };
 
-    try std.testing.expect(zgc.Validation.shapesMatch(lhs, same));
-    try std.testing.expect(!zgc.Validation.shapesMatch(lhs, rhs));
-    try std.testing.expect(zgc.Validation.extentsMatch(lhs, 1, rhs, 0));
-    try std.testing.expect(zgc.Validation.axisIsValid(lhs, 0));
-    try std.testing.expect(zgc.Validation.axisIsValid(lhs, 1));
-    try std.testing.expect(!zgc.Validation.axisIsValid(lhs, -1));
-    try std.testing.expect(!zgc.Validation.axisIsValid(lhs, 2));
+    try std.testing.expect(zgc.compiler.Validation.shapesMatch(lhs, same));
+    try std.testing.expect(!zgc.compiler.Validation.shapesMatch(lhs, rhs));
+    try std.testing.expect(zgc.compiler.Validation.extentsMatch(lhs, 1, rhs, 0));
+    try std.testing.expect(zgc.compiler.Validation.axisIsValid(lhs, 0));
+    try std.testing.expect(zgc.compiler.Validation.axisIsValid(lhs, 1));
+    try std.testing.expect(!zgc.compiler.Validation.axisIsValid(lhs, -1));
+    try std.testing.expect(!zgc.compiler.Validation.axisIsValid(lhs, 2));
 }
 
 test "validation checks trailing-axis broadcast compatibility" {
@@ -73,17 +73,17 @@ test "validation checks trailing-axis broadcast compatibility" {
     const outer_rhs = Value{ .dtype = .f32, .shape = .init(&.{ 1, 4 }) };
     const invalid = Value{ .dtype = .f32, .shape = .init(&.{2}) };
 
-    try std.testing.expect(zgc.Validation.shapesBroadcast(matrix, vector));
-    try std.testing.expect(zgc.Validation.shapesBroadcast(outer_lhs, outer_rhs));
-    try std.testing.expect(!zgc.Validation.shapesBroadcast(matrix, invalid));
+    try std.testing.expect(zgc.compiler.Validation.shapesBroadcast(matrix, vector));
+    try std.testing.expect(zgc.compiler.Validation.shapesBroadcast(outer_lhs, outer_rhs));
+    try std.testing.expect(!zgc.compiler.Validation.shapesBroadcast(matrix, invalid));
 }
 
 test "validation checks normalized reduction axis sets" {
     const Value = ShapedValue(3);
     const tensor = Value{ .dtype = .f32, .shape = .init(&.{ 2, 3, 4 }) };
 
-    try std.testing.expect(zgc.Validation.reductionAxesAreValid(tensor, 0b001));
-    try std.testing.expect(zgc.Validation.reductionAxesAreValid(tensor, 0b101));
-    try std.testing.expect(!zgc.Validation.reductionAxesAreValid(tensor, 0));
-    try std.testing.expect(!zgc.Validation.reductionAxesAreValid(tensor, 0b1000));
+    try std.testing.expect(zgc.compiler.Validation.reductionAxesAreValid(tensor, 0b001));
+    try std.testing.expect(zgc.compiler.Validation.reductionAxesAreValid(tensor, 0b101));
+    try std.testing.expect(!zgc.compiler.Validation.reductionAxesAreValid(tensor, 0));
+    try std.testing.expect(!zgc.compiler.Validation.reductionAxesAreValid(tensor, 0b1000));
 }

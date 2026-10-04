@@ -4,13 +4,13 @@ const zgc = @import("zgc");
 test "copy materializes logical values from a strided view" {
     var input_storage = [_]f32{ 1, 2, 3, 4, 5, 6 };
     var output_storage: [6]f32 = undefined;
-    const transposed: zgc.Tensor.ConstView(f32, 2) = .{
+    const transposed: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &input_storage,
         .shape = .{ 3, 2 },
         .strides = .{ 1, 3 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_storage,
         .shape = .{ 3, 2 },
         .strides = .{ 2, 1 },

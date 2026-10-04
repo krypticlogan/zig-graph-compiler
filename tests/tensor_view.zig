@@ -2,8 +2,8 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 test "contiguous layout computes row-major strides" {
-    const Shape = zgc.Tensor.Shape(3);
-    const Layout = zgc.Tensor.Layout(3);
+    const Shape = zgc.core.Tensor.Shape(3);
+    const Layout = zgc.core.Tensor.Layout(3);
     const layout = Layout.contiguous(Shape.init(&.{ 2, 3, 4 }));
 
     try std.testing.expectEqual(@as(usize, 0), layout.offset);
@@ -12,7 +12,7 @@ test "contiguous layout computes row-major strides" {
 
 test "view maps logical indices through offset and strides" {
     var storage = [_]i32{ 0, 1, 2, 3, 4, 5, 6, 7 };
-    var view: zgc.Tensor.View(i32, 2) = .{
+    var view: zgc.core.Tensor.View(i32, 2) = .{
         .storage = &storage,
         .shape = .{ 2, 2 },
         .strides = .{ 3, 1 },
@@ -30,19 +30,19 @@ test "view maps logical indices through offset and strides" {
 
 test "views identify row-major contiguity" {
     var storage: [8]f32 = @splat(0);
-    const contiguous: zgc.Tensor.View(f32, 2) = .{
+    const contiguous: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &storage,
         .shape = .{ 2, 3 },
         .strides = .{ 3, 1 },
         .offset = 0,
     };
-    const transposed: zgc.Tensor.View(f32, 2) = .{
+    const transposed: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &storage,
         .shape = .{ 3, 2 },
         .strides = .{ 1, 3 },
         .offset = 0,
     };
-    const singleton_axis: zgc.Tensor.View(f32, 3) = .{
+    const singleton_axis: zgc.core.Tensor.View(f32, 3) = .{
         .storage = &storage,
         .shape = .{ 2, 1, 4 },
         .strides = .{ 4, 99, 1 },
@@ -56,19 +56,19 @@ test "views identify row-major contiguity" {
 
 test "contiguous slices respect logical offset and length" {
     var storage = [_]i32{ -1, -1, 10, 20, 30, 40, -1 };
-    var view: zgc.Tensor.View(i32, 2) = .{
+    var view: zgc.core.Tensor.View(i32, 2) = .{
         .storage = &storage,
         .shape = .{ 2, 2 },
         .strides = .{ 2, 1 },
         .offset = 2,
     };
-    const const_view: zgc.Tensor.ConstView(i32, 2) = .{
+    const const_view: zgc.core.Tensor.ConstView(i32, 2) = .{
         .storage = &storage,
         .shape = .{ 2, 2 },
         .strides = .{ 2, 1 },
         .offset = 2,
     };
-    const strided: zgc.Tensor.ConstView(i32, 2) = .{
+    const strided: zgc.core.Tensor.ConstView(i32, 2) = .{
         .storage = &storage,
         .shape = .{ 2, 2 },
         .strides = .{ 3, 1 },
@@ -89,7 +89,7 @@ test "contiguous slices respect logical offset and length" {
 
 test "logical linear offsets support negative strides" {
     var storage = [_]i32{ 0, 1, 2, 3, 4, 5 };
-    const reversed_columns: zgc.Tensor.ConstView(i32, 2) = .{
+    const reversed_columns: zgc.core.Tensor.ConstView(i32, 2) = .{
         .storage = &storage,
         .shape = .{ 2, 3 },
         .strides = .{ 3, -1 },
@@ -104,7 +104,7 @@ test "logical linear offsets support negative strides" {
 
 test "dense slices expose a physically contiguous axis permutation" {
     var storage = [_]i32{ 1, 4, 2, 5, 3, 6 };
-    const view: zgc.Tensor.View(i32, 2) = .{
+    const view: zgc.core.Tensor.View(i32, 2) = .{
         .storage = &storage,
         .shape = .{ 2, 3 },
         .strides = .{ 1, 2 },
@@ -117,7 +117,7 @@ test "dense slices expose a physically contiguous axis permutation" {
 
 test "axis slices preserve storage, offsets, and selected strides" {
     var storage = [_]i32{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
-    var view: zgc.Tensor.View(i32, 3) = .{
+    var view: zgc.core.Tensor.View(i32, 3) = .{
         .storage = &storage,
         .shape = .{ 2, 2, 3 },
         .strides = .{ 6, 3, 1 },
@@ -143,7 +143,7 @@ test "axis slices preserve storage, offsets, and selected strides" {
 
 test "const axis slices support offsets and negative selected strides" {
     const storage = [_]i32{ 0, 1, 2, 3, 4, 5 };
-    const view: zgc.Tensor.ConstView(i32, 2) = .{
+    const view: zgc.core.Tensor.ConstView(i32, 2) = .{
         .storage = &storage,
         .shape = .{ 2, 3 },
         .strides = .{ 3, -1 },
@@ -160,7 +160,7 @@ test "const axis slices support offsets and negative selected strides" {
 
 test "broadcast views introduce zero strides without allocating storage" {
     var storage = [_]i32{ 10, 20, 30 };
-    const vector: zgc.Tensor.View(i32, 1) = .{
+    const vector: zgc.core.Tensor.View(i32, 1) = .{
         .storage = &storage,
         .shape = .{3},
         .strides = .{1},
@@ -180,13 +180,13 @@ test "broadcast views introduce zero strides without allocating storage" {
 test "broadcast views expand singleton axes and rank-zero scalars" {
     const matrix_storage = [_]i32{ 1, 2 };
     const scalar_storage = [_]i32{7};
-    const matrix: zgc.Tensor.ConstView(i32, 2) = .{
+    const matrix: zgc.core.Tensor.ConstView(i32, 2) = .{
         .storage = &matrix_storage,
         .shape = .{ 2, 1 },
         .strides = .{ 1, 1 },
         .offset = 0,
     };
-    const scalar: zgc.Tensor.ConstView(i32, 0) = .{
+    const scalar: zgc.core.Tensor.ConstView(i32, 0) = .{
         .storage = &scalar_storage,
         .shape = .{},
         .strides = .{},

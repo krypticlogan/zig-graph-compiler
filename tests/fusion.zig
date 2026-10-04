@@ -69,6 +69,23 @@ const VectorReductionModel = model: {
     break :model builder.finish().model();
 };
 
+const map_vector_width = std.simd.suggestVectorLength(f32) orelse 1;
+const map_vector_length = map_vector_width + 1;
+const BroadcastMapDefinition = zgc.DefinitionBuilder(enum(usize) { cells, channels }, .{
+    .max_rank = 3,
+    .max_nodes = 2,
+    .max_tensors = 5,
+    .max_input_refs = 4,
+    .max_outputs = 1,
+});
+const BroadcastMapModel = model: {
+    var builder = BroadcastMapDefinition.init();
+    const cells = builder.input(.cells, .f32, &.{ 2, 3, 1 });
+    const channels = builder.input(.channels, .f32, &.{map_vector_length});
+    builder.output(builder.add(builder.mul(cells, channels), builder.scalar(.f32, 1)));
+    break :model builder.finish().model();
+};
+
 test "elementwise producer folds into its reduction" {
     const Model = ProducerReductionModel;
 
@@ -151,6 +168,31 @@ test "fused reductions vectorize a contiguous reduced axis and handle its tail" 
     );
 }
 
+test "map traversal vectorizes a contiguous axis with broadcast inputs" {
+    const invocation = BroadcastMapModel.executable.nodes[0].?;
+    switch (invocation.op.compute.kernel) {
+        .map => |plan| switch (plan.strategy) {
+            .traversal => |traversal| {
+                if (map_vector_width > 1) {
+                    try std.testing.expectEqual(@as(?u8, 2), traversal.vector_axis);
+                    try std.testing.expectEqual(map_vector_width, traversal.vector_width);
+                }
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var cells: [6]f32 = @splat(2);
+    var channels: [map_vector_length]f32 = @splat(1);
+    var expected: [6 * map_vector_length]f32 = @splat(3);
+    var model = BroadcastMapModel.init();
+    try model.copyInput(.cells, &cells);
+    try model.copyInput(.channels, &channels);
+    model.run();
+    try std.testing.expectEqualSlices(f32, &expected, model.outputView(0).contiguousSlice().?);
+}
+
 test "mixed boolean and numeric pointwise expressions fuse without predicate storage" {
     const Model = TypedPointwiseModel;
 
@@ -162,10 +204,11 @@ test "mixed boolean and numeric pointwise expressions fuse without predicate sto
     try std.testing.expect(Model.memory_plan.tensor_regions[3] == null);
     switch (Model.executable.nodes[0].?.op.compute.kernel) {
         .map => |plan| {
-            try std.testing.expectEqual(@as(usize, 3), plan.region.expressions.instructions.len);
-            try std.testing.expectEqual(zgc.Dtype.bool, plan.region.expressions.instructions[0].dtype);
-            try std.testing.expectEqual(zgc.Dtype.f32, plan.region.expressions.instructions[1].dtype);
-            try std.testing.expectEqual(zgc.Dtype.f32, plan.region.expressions.instructions[2].dtype);
+            const expression = plan.region.body.expression;
+            try std.testing.expectEqual(@as(usize, 3), expression.instructions.len);
+            try std.testing.expectEqual(zgc.memory.Dtype.bool, expression.instructions[0].dtype);
+            try std.testing.expectEqual(zgc.memory.Dtype.f32, expression.instructions[1].dtype);
+            try std.testing.expectEqual(zgc.memory.Dtype.f32, expression.instructions[2].dtype);
         },
         else => return error.TestUnexpectedResult,
     }

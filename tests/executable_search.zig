@@ -2,7 +2,7 @@ const std = @import("std");
 const zgc = @import("zgc");
 const models = @import("fixtures/models.zig");
 
-test "executable planning combines analysis alternatives and schedule variants" {
+test "executable search combines analysis alternatives and schedule variants" {
     const Model = models.MatmulModel;
 
     try std.testing.expectEqual(@as(usize, 1), Model.fusion_candidate_count);
@@ -28,21 +28,21 @@ test "executable planning combines analysis alternatives and schedule variants" 
 }
 
 test "structured costs support Pareto dominance" {
-    const baseline: zgc.PlanCost = .{
+    const baseline: zgc.compiler.PlanCost = .{
         .estimated_runtime_work = 100,
         .peak_memory_bytes = 64,
         .persistent_memory_bytes = 32,
         .scratch_memory_bytes = 8,
         .code_size_units = 4,
     };
-    const improvement: zgc.PlanCost = .{
+    const improvement: zgc.compiler.PlanCost = .{
         .estimated_runtime_work = 90,
         .peak_memory_bytes = 64,
         .persistent_memory_bytes = 32,
         .scratch_memory_bytes = 8,
         .code_size_units = 4,
     };
-    const tradeoff: zgc.PlanCost = .{
+    const tradeoff: zgc.compiler.PlanCost = .{
         .estimated_runtime_work = 80,
         .peak_memory_bytes = 128,
         .persistent_memory_bytes = 32,

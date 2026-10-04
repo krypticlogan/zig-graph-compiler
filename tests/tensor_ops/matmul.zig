@@ -13,19 +13,19 @@ test "matmul multiplies contiguous row-major rank-2 tensors" {
     };
     var output_data: [4]f32 = @splat(std.math.nan(f32));
 
-    const lhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const lhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &lhs_data,
         .shape = .{ 2, 3 },
         .strides = .{ 3, 1 },
         .offset = 0,
     };
-    const rhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const rhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &rhs_data,
         .shape = .{ 3, 2 },
         .strides = .{ 2, 1 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_data,
         .shape = .{ 2, 2 },
         .strides = .{ 2, 1 },
@@ -69,19 +69,19 @@ test "matmul handles a native SIMD chunk followed by a column tail" {
         }
     }
 
-    const lhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const lhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &lhs_data,
         .shape = .{ m, k_len },
         .strides = .{ k_len, 1 },
         .offset = 0,
     };
-    const rhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const rhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &rhs_data,
         .shape = .{ k_len, n },
         .strides = .{ n, 1 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_data,
         .shape = .{ m, n },
         .strides = .{ n, 1 },
@@ -98,19 +98,19 @@ test "matmul supports strided inputs and output" {
     var rhs_storage = [_]f32{ 7, 8, 9, 10, 11, 12 };
     var output_storage: [4]f32 = @splat(std.math.nan(f32));
 
-    const lhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const lhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &lhs_storage,
         .shape = .{ 2, 3 },
         .strides = .{ 1, 2 },
         .offset = 0,
     };
-    const rhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const rhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &rhs_storage,
         .shape = .{ 3, 2 },
         .strides = .{ 2, 1 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_storage,
         .shape = .{ 2, 2 },
         .strides = .{ 1, 2 },
@@ -150,19 +150,19 @@ test "matmul vectorizes output columns with a transposed lhs" {
         }
     }
 
-    const lhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const lhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &lhs_storage,
         .shape = .{ m, k_len },
         .strides = .{ 1, m },
         .offset = 0,
     };
-    const rhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const rhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &rhs_storage,
         .shape = .{ k_len, n },
         .strides = .{ n, 1 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_storage,
         .shape = .{ m, n },
         .strides = .{ n, 1 },
@@ -202,19 +202,19 @@ test "matmul vectorizes the contracted axis for a transposed rhs" {
         }
     }
 
-    const lhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const lhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &lhs_storage,
         .shape = .{ m, k_len },
         .strides = .{ k_len, 1 },
         .offset = 0,
     };
-    const rhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const rhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &rhs_storage,
         .shape = .{ k_len, n },
         .strides = .{ 1, k_len },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_storage,
         .shape = .{ m, n },
         .strides = .{ n, 1 },
@@ -253,19 +253,19 @@ test "matmul vectorizes output rows for column-major lhs and output" {
         }
     }
 
-    const lhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const lhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &lhs_storage,
         .shape = .{ m, k_len },
         .strides = .{ 1, m },
         .offset = 0,
     };
-    const rhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const rhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &rhs_storage,
         .shape = .{ k_len, n },
         .strides = .{ n, 1 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_storage,
         .shape = .{ m, n },
         .strides = .{ 1, m },
@@ -282,19 +282,19 @@ test "matmul retains a scalar fallback for incompatible strides" {
     var rhs_storage = [_]f32{ 5, 99, 6, 99, 7, 99, 8 };
     var output_storage: [6]f32 = @splat(99);
 
-    const lhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const lhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &lhs_storage,
         .shape = .{ 2, 2 },
         .strides = .{ 3, 2 },
         .offset = 0,
     };
-    const rhs: zgc.Tensor.ConstView(f32, 2) = .{
+    const rhs: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &rhs_storage,
         .shape = .{ 2, 2 },
         .strides = .{ 4, 2 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_storage,
         .shape = .{ 2, 2 },
         .strides = .{ 3, 2 },

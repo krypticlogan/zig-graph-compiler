@@ -17,11 +17,12 @@ test "inspection renders a generated model through a writer" {
 }
 
 test "inspection CLI selects individual representations" {
-    var buffer: [2048]u8 = undefined;
+    var buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try std.testing.expect(try zgc.Inspect.runCli(Model, &.{"summary"}, &writer));
+    try std.testing.expect(try zgc.Inspect.runCli(Model, &.{"semantic-graph"}, &writer));
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "== Capacity ==") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "== Optimized semantic graph ==") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "== Raw graph ==") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "== Executable ==") == null);
 }
 

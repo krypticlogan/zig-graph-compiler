@@ -5,19 +5,19 @@ test "concat materializes strided inputs along a selected axis" {
     var left_storage = [_]f32{ 1, 2, 3, 4 };
     var right_storage = [_]f32{ 5, 6 };
     var output_storage: [6]f32 = undefined;
-    const left: zgc.Tensor.ConstView(f32, 2) = .{
+    const left: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &left_storage,
         .shape = .{ 2, 2 },
         .strides = .{ 1, 2 },
         .offset = 0,
     };
-    const right: zgc.Tensor.ConstView(f32, 2) = .{
+    const right: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &right_storage,
         .shape = .{ 2, 1 },
         .strides = .{ 1, 1 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 2) = .{
+    const output: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &output_storage,
         .shape = .{ 2, 3 },
         .strides = .{ 3, 1 },

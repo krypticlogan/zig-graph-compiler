@@ -159,11 +159,11 @@ test "comparisons and selection carry explicit boolean dtype through lowering" {
     const condition = graph.tensors[2].?;
     const selected = graph.tensors[5].?;
 
-    try std.testing.expectEqual(zgc.Dtype.bool, condition.dtype);
+    try std.testing.expectEqual(zgc.memory.Dtype.bool, condition.dtype);
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, condition.shape.slice());
-    try std.testing.expectEqual(zgc.Dtype.f32, selected.dtype);
+    try std.testing.expectEqual(zgc.memory.Dtype.f32, selected.dtype);
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, selected.shape.slice());
-    try std.testing.expectEqual(@as(bool, true), zgc.ScalarValue.init(.bool, true).get(.bool));
+    try std.testing.expectEqual(@as(bool, true), zgc.memory.ScalarValue.init(.bool, true).get(.bool));
 
     var model = predicate_model.init();
     try model.copyInput(.lhs, &[_]f32{ -2, 0, 3, -4, 5, 6 });
@@ -206,6 +206,6 @@ test "primitive builders infer every math and predicate operation without model 
         break :blk builder.finish();
     };
 
-    try std.testing.expectEqual(zgc.Dtype.f32, definition.tensors[definition.tensor_count - 1].value.dtype);
+    try std.testing.expectEqual(zgc.memory.Dtype.f32, definition.tensors[definition.tensor_count - 1].value.dtype);
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, definition.tensors[definition.tensor_count - 1].value.shape.slice());
 }

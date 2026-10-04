@@ -11,7 +11,7 @@ test "multi-axis reductions preserve unselected dimensions" {
     var mean_storage: [3]f32 = undefined;
     var min_storage: [3]f32 = undefined;
     var max_storage: [3]f32 = undefined;
-    const input: zgc.Tensor.ConstView(f32, 3) = .{
+    const input: zgc.core.Tensor.ConstView(f32, 3) = .{
         .storage = &input_storage,
         .shape = .{ 2, 3, 2 },
         .strides = .{ 1, 4, 2 },
@@ -26,7 +26,7 @@ test "multi-axis reductions preserve unselected dimensions" {
         .{ .op = zgc.Op{ .compute = .{ .min = attrs } }, .storage = &min_storage },
         .{ .op = zgc.Op{ .compute = .{ .max = attrs } }, .storage = &max_storage },
     }) |case| {
-        const output: zgc.Tensor.View(f32, 1) = .{
+        const output: zgc.core.Tensor.View(f32, 1) = .{
             .storage = case.storage,
             .shape = .{3},
             .strides = .{1},
@@ -44,13 +44,13 @@ test "multi-axis reductions preserve unselected dimensions" {
 test "keep_dims retains reduced axes as singleton dimensions" {
     var input_storage = [_]f32{ 1, 2, 3, 4, 5, 6 };
     var output_storage: [2]f32 = undefined;
-    const input: zgc.Tensor.ConstView(f32, 3) = .{
+    const input: zgc.core.Tensor.ConstView(f32, 3) = .{
         .storage = &input_storage,
         .shape = .{ 2, 1, 3 },
         .strides = .{ 3, 3, 1 },
         .offset = 0,
     };
-    const output: zgc.Tensor.View(f32, 3) = .{
+    const output: zgc.core.Tensor.View(f32, 3) = .{
         .storage = &output_storage,
         .shape = .{ 2, 1, 1 },
         .strides = .{ 1, 1, 1 },
@@ -68,19 +68,19 @@ test "integer min and max reductions use finite dtype identities" {
     var input_storage = [_]i8{ -7, 2, 12, -3 };
     var min_storage: [1]i8 = undefined;
     var max_storage: [1]i8 = undefined;
-    const input: zgc.Tensor.ConstView(i8, 1) = .{
+    const input: zgc.core.Tensor.ConstView(i8, 1) = .{
         .storage = &input_storage,
         .shape = .{4},
         .strides = .{1},
         .offset = 0,
     };
-    const min_output: zgc.Tensor.View(i8, 0) = .{
+    const min_output: zgc.core.Tensor.View(i8, 0) = .{
         .storage = &min_storage,
         .shape = .{},
         .strides = .{},
         .offset = 0,
     };
-    const max_output: zgc.Tensor.View(i8, 0) = .{
+    const max_output: zgc.core.Tensor.View(i8, 0) = .{
         .storage = &max_storage,
         .shape = .{},
         .strides = .{},
@@ -105,7 +105,7 @@ test "mean min and max vectorize contiguous single-axis reductions with tails" {
     var mean_storage: [1]f32 = undefined;
     var min_storage: [1]f32 = undefined;
     var max_storage: [1]f32 = undefined;
-    const input: zgc.Tensor.ConstView(f32, 1) = .{
+    const input: zgc.core.Tensor.ConstView(f32, 1) = .{
         .storage = &input_storage,
         .shape = .{len},
         .strides = .{1},
@@ -118,7 +118,7 @@ test "mean min and max vectorize contiguous single-axis reductions with tails" {
         .{ .op = zgc.Op{ .compute = .{ .min = attrs } }, .storage = &min_storage },
         .{ .op = zgc.Op{ .compute = .{ .max = attrs } }, .storage = &max_storage },
     }) |case| {
-        const output: zgc.Tensor.View(f32, 0) = .{
+        const output: zgc.core.Tensor.View(f32, 0) = .{
             .storage = case.storage,
             .shape = .{},
             .strides = .{},

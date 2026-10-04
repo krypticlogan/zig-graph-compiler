@@ -6,25 +6,25 @@ test "mul and div use trailing-axis broadcasting" {
     var vector_storage = [_]f32{ 2, 4, 8 };
     var product_storage: [6]f32 = undefined;
     var quotient_storage: [6]f32 = undefined;
-    const matrix: zgc.Tensor.ConstView(f32, 2) = .{
+    const matrix: zgc.core.Tensor.ConstView(f32, 2) = .{
         .storage = &matrix_storage,
         .shape = .{ 2, 3 },
         .strides = .{ 3, 1 },
         .offset = 0,
     };
-    const vector: zgc.Tensor.ConstView(f32, 1) = .{
+    const vector: zgc.core.Tensor.ConstView(f32, 1) = .{
         .storage = &vector_storage,
         .shape = .{3},
         .strides = .{1},
         .offset = 0,
     };
-    const product: zgc.Tensor.View(f32, 2) = .{
+    const product: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &product_storage,
         .shape = .{ 2, 3 },
         .strides = .{ 3, 1 },
         .offset = 0,
     };
-    const quotient: zgc.Tensor.View(f32, 2) = .{
+    const quotient: zgc.core.Tensor.View(f32, 2) = .{
         .storage = &quotient_storage,
         .shape = .{ 2, 3 },
         .strides = .{ 3, 1 },
