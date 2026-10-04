@@ -1,7 +1,7 @@
 const std = @import("std");
-const Dtype = @import("../dtype.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 const Elementwise = @import("elementwise.zig");
-const Tensor = @import("../tensor.zig");
+const Tensor = @import("../core/tensor.zig");
 const kernels = @import("../kernels/root.zig");
 const validation = @import("../validation.zig");
 
@@ -42,6 +42,7 @@ pub const Op = union(enum) {
         contiguous,
         pad: PadAttrs,
         shift: ShiftAttrs,
+        slice_loop: SliceLoopAttrs,
         matmul,
         sum: ReductionAttrs,
         mean: ReductionAttrs,
@@ -65,6 +66,22 @@ pub const Op = union(enum) {
             boundary: Boundary,
 
             pub const Boundary = enum { wrap, edge, reflect, constant };
+        };
+        pub const SliceLoopAttrs = struct {
+            axis: i8,
+            iterations: []const Iteration,
+
+            pub const Iteration = struct {
+                offsets: []const isize,
+                boundary: Boundary,
+            };
+
+            pub const Boundary = union(enum) {
+                wrap,
+                edge,
+                reflect,
+                redirect: usize,
+            };
         };
         pub fn execute(
             comptime op: Compute,
@@ -108,6 +125,7 @@ pub const Op = union(enum) {
                     _ = inferShiftRank(inputs, attrs);
                     break :blk inputs[0].shape;
                 },
+                .slice_loop => |attrs| inferSliceLoopShape(inputs, attrs, max_rank),
                 .matmul => inferMatmulShape(inputs, max_rank),
                 .sum => |attrs| inferNumericReductionShape("sum", inputs, attrs, max_rank),
                 .mean => |attrs| blk: {
@@ -372,6 +390,32 @@ fn inferShiftRank(inputs: anytype, comptime attrs: Op.Compute.ShiftAttrs) usize 
         }
     }
     return rank;
+}
+
+fn inferSliceLoopShape(
+    comptime inputs: anytype,
+    comptime attrs: Op.Compute.SliceLoopAttrs,
+    comptime max_rank: usize,
+) Tensor.Shape(max_rank) {
+    validation.requireInputCount("sliceLoop", inputs, 1);
+    const rank = validation.rankOf(inputs[0]);
+    validation.requireAxis("sliceLoop", inputs[0], attrs.axis);
+    const axis: usize = @intCast(attrs.axis);
+    if (attrs.iterations.len != inputs[0].shape.at(axis)) {
+        @compileError("sliceLoop requires one iteration descriptor per selected slice");
+    }
+    for (attrs.iterations) |iteration| {
+        if (iteration.offsets.len != rank - 1) {
+            @compileError("sliceLoop iteration offsets must cover every non-loop axis");
+        }
+        switch (iteration.boundary) {
+            .redirect => |redirect| if (redirect >= attrs.iterations.len) {
+                @compileError("sliceLoop redirect is outside the loop axis");
+            },
+            .wrap, .edge, .reflect => {},
+        }
+    }
+    return inputs[0].shape;
 }
 
 fn inferPadShape(

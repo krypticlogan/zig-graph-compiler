@@ -1,9 +1,10 @@
 const Construction = @import("construction.zig");
 const Analysis = @import("analysis.zig");
-const Planning = @import("executable_planning.zig");
+const Search = @import("search.zig");
+const SemanticOptimization = @import("semantic_optimization.zig");
 const validation = @import("validation.zig");
-const Model = @import("../model.zig").Model;
-const Source = @import("../source.zig");
+const Model = @import("../core/model.zig").Model;
+const Source = @import("../storage/source.zig");
 
 /// Run the compilation steps from a completed definition to a generated model.
 pub fn model(
@@ -16,8 +17,10 @@ pub fn model(
     @setEvalBranchQuota(compile_work);
     const capacity = Construction.count(Definition, definition);
     const raw_graph = Construction.GraphConstruction(Definition, capacity).build(definition);
-    const SemanticValidated = validation.Validation(capacity).validate(raw_graph);
-    const semantic_analysis = Analysis.SemanticAnalysis().analyze(SemanticValidated);
+    const RawValidated = validation.Validation(capacity).validate(raw_graph);
+    const semantic_optimization = SemanticOptimization.SemanticOptimization(capacity).optimize(RawValidated.graph);
+    const SemanticValidated = validation.Validation(capacity).validate(semantic_optimization.graph);
+    const semantic_analysis = Analysis.SemanticAnalysis(capacity).analyze(SemanticValidated);
     const fusion_candidates = Analysis.FusionAnalysis(capacity).analyze(
         SemanticValidated.graph,
         semantic_analysis,
@@ -26,13 +29,18 @@ pub fn model(
         SemanticValidated.graph,
         semantic_analysis,
     );
+    const remap_candidates = Analysis.RemapAnalysis(capacity).analyze(
+        SemanticValidated.graph,
+        semantic_analysis,
+    );
 
-    const executable_search = Planning.ExecutablePlanning(capacity).search(
+    const executable_search = Search.ExecutableSearch(capacity).search(
         Definition.Source,
         SemanticValidated,
         semantic_analysis,
         fusion_candidates,
         layout_candidates,
+        remap_candidates,
         source_configuration,
     );
     const selected_candidate = executable_search.selected();
@@ -40,7 +48,7 @@ pub fn model(
     const FinalValidated = validation.FinalValidation(capacity).validate(executable);
     const graph = FinalValidated.graph;
 
-    const lifetime_analysis = Planning.LifetimeAnalysis().analyze(FinalValidated);
+    const lifetime_analysis = Search.LifetimeAnalysis().analyze(FinalValidated);
     const SourcePlan = Source.Plan(
         Definition.Source,
         capacity,
@@ -51,6 +59,7 @@ pub fn model(
         Definition.Source,
         capacity,
         raw_graph,
+        semantic_optimization,
         SemanticValidated,
         semantic_analysis,
         executable_search,

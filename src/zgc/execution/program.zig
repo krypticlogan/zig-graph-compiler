@@ -1,5 +1,5 @@
-const Graph = @import("../graph.zig");
-const Tensor = @import("../tensor.zig");
+const Graph = @import("../core/graph.zig");
+const Tensor = @import("../core/tensor.zig");
 /// A complete executable program. Its node sequence is the literal execution
 /// schedule, and one invocation may write several tensors.
 pub fn Executable(comptime capacity: Graph.Capacity, Operation: type) type {
@@ -15,12 +15,12 @@ pub fn Executable(comptime capacity: Graph.Capacity, Operation: type) type {
             output_count: usize,
         };
 
-        nodes: [capacity.max_nodes]?Invocation = .{null} ** capacity.max_nodes,
-        tensors: [capacity.max_tensors]?TensorInfo = .{null} ** capacity.max_tensors,
-        input_refs: [capacity.max_input_refs]?Tensor.Id = .{null} ** capacity.max_input_refs,
-        output_refs: [capacity.max_tensors]?Tensor.Id = .{null} ** capacity.max_tensors,
-        outputs: [capacity.max_outputs]?Tensor.Id = .{null} ** capacity.max_outputs,
-        sources: [capacity.max_sources]?Tensor.Source = .{null} ** capacity.max_sources,
+        nodes: [capacity.max_nodes]?Invocation = @splat(null),
+        tensors: [capacity.max_tensors]?TensorInfo = @splat(null),
+        input_refs: [capacity.max_input_refs]?Tensor.Id = @splat(null),
+        output_refs: [capacity.max_tensors]?Tensor.Id = @splat(null),
+        outputs: [capacity.max_outputs]?Tensor.Id = @splat(null),
+        sources: [capacity.max_sources]?Tensor.Source = @splat(null),
         materialized: [capacity.max_tensors]bool = @splat(false),
 
         node_ct: usize = 0,

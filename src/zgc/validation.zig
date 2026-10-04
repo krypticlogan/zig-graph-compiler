@@ -1,5 +1,5 @@
 const std = @import("std");
-const Dtype = @import("dtype.zig").Dtype;
+const Dtype = @import("storage/dtype.zig").Dtype;
 
 /// Return the rank carried by either a counting-pass value (`rank`) or a
 /// materialized graph value (`shape.rank`).

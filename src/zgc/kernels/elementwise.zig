@@ -1,5 +1,5 @@
 const std = @import("std");
-const Dtype = @import("../dtype.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 const Operation = @import("../operations/elementwise.zig").Operation;
 const operation = @import("elementwise_operation.zig");
 

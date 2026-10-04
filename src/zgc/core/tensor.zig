@@ -1,6 +1,6 @@
 const std = @import("std");
-const Dtype = @import("dtype.zig").Dtype;
-const ScalarValue = @import("dtype.zig").ScalarValue;
+const Dtype = @import("../storage/dtype.zig").Dtype;
+const ScalarValue = @import("../storage/dtype.zig").ScalarValue;
 
 pub const Id = usize;
 pub const Shape_T = []const usize;
@@ -655,12 +655,6 @@ pub fn Shape(comptime max_rank: usize) type {
         }
     };
 }
-
-// fn elementCount(comptime shape: Shape_T) usize {
-//     var count: usize = 1;
-//     for (shape) |extent| count *= extent;
-//     return count;
-// }
 
 // Represents an input source
 pub const Source = struct {

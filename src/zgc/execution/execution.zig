@@ -1,17 +1,15 @@
-const Semantic = @import("operations/semantic.zig");
-const contraction = @import("kernels/contraction.zig");
-const direct = @import("kernels/root.zig");
-const map_kernel = @import("kernels/fusion/map.zig");
-const reduction_kernel = @import("kernels/fusion/reduction.zig");
-
-const Plan = @import("execution/kernel_plan.zig");
+const Semantic = @import("../operations/semantic.zig");
+const contraction = @import("../kernels/contraction.zig");
+const direct = @import("../kernels/root.zig");
+const map_kernel = @import("../kernels/map/root.zig");
+const reduction_kernel = @import("../kernels/fusion/reduction.zig");
 
 /// Operation after optimization has selected physical layouts and concrete
 /// kernel strategies. Unchanged semantic operations are retained directly;
 /// only specialized operations gain an execution-specific representation.
 pub const ExecutableCompute = union(enum) {
     direct: Semantic.Op.Compute,
-    kernel: Plan.KernelPlan,
+    kernel: KernelPlan,
 
     pub fn execute(comptime compute: ExecutableCompute, inputs: anytype, outputs: anytype) void {
         switch (compute) {
@@ -49,4 +47,15 @@ pub const Op = union(enum) {
             .view => .view,
         };
     }
+};
+
+pub const MapPlan = @import("../compiler/planning/map.zig").Plan;
+pub const ReductionPlan = @import("../compiler/planning/reduction.zig").Plan;
+pub const ContractionPlan = @import("../compiler/planning/contraction.zig").Plan;
+
+/// Data-only physical plan selected after fusion and layout planning.
+pub const KernelPlan = union(enum) {
+    map: MapPlan,
+    reduction: ReductionPlan,
+    contraction: ContractionPlan,
 };

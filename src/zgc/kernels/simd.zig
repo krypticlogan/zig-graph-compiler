@@ -1,5 +1,5 @@
 const std = @import("std");
-const Dtype = @import("../dtype.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 const accumulation = @import("accumulation.zig");
 
 /// Reduce a contiguous slice. The operator defines the scalar and vector

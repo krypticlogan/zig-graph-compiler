@@ -1,11 +1,11 @@
 const std = @import("std");
-const Graph = @import("../graph.zig");
+const Graph = @import("../core/graph.zig");
 const Op = @import("../operations/semantic.zig").Op;
-const Tensor = @import("../tensor.zig");
+const Tensor = @import("../core/tensor.zig");
 const layout_ops = @import("../kernels/layout.zig");
-const Plan = @import("../execution/kernel_plan.zig");
-const fusion = @import("../optimization/fusion/expression.zig");
-const matmul = @import("../optimization/matmul.zig");
+const Plan = @import("../execution/execution.zig");
+const fusion = @import("optimization/fusion/expression.zig");
+const matmul = @import("planning/contraction.zig");
 
 /// Validates the constructed semantic graph before analysis.
 pub fn Validation(comptime capacity: Graph.Capacity) type {
@@ -119,9 +119,7 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
                             .map => |plan| validateMapPlan(plan, &inputs, &outputs),
                             .reduction => |plan| validateReductionPlan(plan, &inputs, &outputs),
                             .contraction => |plan| {
-                                requireOutputCount(node.output_count, 1);
-                                validateSemantic(.matmul, &inputs, outputs[0]);
-                                matmul.validate(plan, inputs[0], inputs[1], outputs[0]);
+                                validateContractionPlan(plan, &inputs, &outputs);
                             },
                         },
                     },
@@ -187,47 +185,234 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
         fn validateMapPlan(comptime plan: Plan.MapPlan, comptime inputs: anytype, comptime outputs: anytype) void {
             if (plan.region.stores.len != outputs.len) @compileError("map stores must match invocation outputs");
             if (outputs.len != 1) @compileError("multi-store map execution is not implemented");
-            validateElementwiseProgram(plan.region.expressions, inputs, outputs[0]);
             const store = plan.region.stores[0];
             if (store.output != 0) @compileError("single-output map store must target output zero");
-            switch (store.value) {
-                .instruction => |index| if (index != plan.region.expressions.instructions.len - 1) {
-                    @compileError("map executor requires its store to reference the final instruction");
+            if (!std.mem.eql(usize, plan.region.domain.shape, outputs[0].shape.slice())) {
+                @compileError("map domain must match its output shape");
+            }
+            if (plan.region.loads.len != inputs.len) @compileError("map loads must match invocation inputs");
+            for (plan.region.loads, 0..) |load, index| {
+                if (load.input != index) @compileError("map loads must identify invocation inputs in order");
+            }
+            switch (plan.strategy) {
+                .traversal => |traversal| {
+                    const expression = switch (plan.region.body) {
+                        .expression => |expression| expression,
+                        .transfer, .expression_transfer => @compileError("map traversal requires an expression body"),
+                    };
+                    if (store.access != .logical) @compileError("expression map stores require logical access");
+                    validateElementwiseProgram(expression, inputs, outputs[0]);
+                    switch (store.value) {
+                        .expression => |value| switch (value) {
+                            .instruction => |index| if (index != expression.instructions.len - 1) {
+                                @compileError("map executor requires its store to reference the final instruction");
+                            },
+                            .input, .accumulator => @compileError("map store must reference an expression instruction"),
+                        },
+                        .accumulator, .contraction, .transfer => {
+                            @compileError("map executor requires its store to reference the final instruction");
+                        },
+                    }
+                    if (traversal.vector_width == 0 or traversal.unroll == 0) {
+                        @compileError("map traversal factors must be nonzero");
+                    }
+                    if (traversal.axis_order.len != outputs[0].shape.rank) {
+                        @compileError("map traversal plan must order every output axis");
+                    }
+                    var seen: [capacity.max_rank]bool = @splat(false);
+                    for (traversal.axis_order) |axis| {
+                        if (axis >= outputs[0].shape.rank or seen[axis]) @compileError("map axis order is invalid");
+                        seen[axis] = true;
+                    }
+                    if (traversal.vector_axis) |axis| {
+                        if (axis >= outputs[0].shape.rank) @compileError("map vector axis is outside the output rank");
+                        if (traversal.axis_order[traversal.axis_order.len - 1] != axis) {
+                            @compileError("map vector axis must be the innermost planned loop");
+                        }
+                        if (outputs[0].shape.at(axis) < traversal.vector_width or outputs[0].layout.strides[axis] != 1) {
+                            @compileError("map vector axis must be contiguous and at least one vector wide");
+                        }
+                        for (inputs) |input| {
+                            const leading_axes = outputs[0].shape.rank - input.shape.rank;
+                            if (axis < leading_axes) continue;
+                            const input_axis = axis - leading_axes;
+                            if (input.shape.at(input_axis) == 1 and outputs[0].shape.at(axis) != 1) continue;
+                            if (input.layout.strides[input_axis] != 1) {
+                                @compileError("map vector inputs must be contiguous or broadcast on the vector axis");
+                            }
+                        }
+                    } else if (traversal.vector_width != 1) {
+                        @compileError("scalar map traversal plans must have vector width one");
+                    }
                 },
-                .input, .accumulator => @compileError("map store must reference an expression instruction"),
+                .segmented => |segmented| {
+                    const expression = switch (plan.region.body) {
+                        .transfer => null,
+                        .expression_transfer => |program| program,
+                        .expression => @compileError("segmented maps require a transfer body"),
+                    };
+                    if (store.access != .segmented or store.value != .transfer) {
+                        @compileError("segmented map stores are defined by their transfer segments");
+                    }
+                    validateSegmentedMap(segmented, expression, inputs, outputs);
+                },
+                .loop => |loop_plan| {
+                    const expression: ?fusion.Program = switch (plan.region.body) {
+                        .transfer => null,
+                        .expression_transfer => |program| program,
+                        .expression => @compileError("loop maps require a transfer body"),
+                    };
+                    if (store.access != .loop or store.value != .transfer) {
+                        @compileError("loop map stores are defined by their loop plan");
+                    }
+                    if (loop_plan.axis >= outputs[0].shape.rank) @compileError("loop axis is outside the output rank");
+                    if (loop_plan.iterations.len != outputs[0].shape.at(loop_plan.axis)) {
+                        @compileError("loop iterations must match the loop-axis extent");
+                    }
+                    if (loop_plan.vector_width == 0) @compileError("loop vector width must be nonzero");
+                    if (loop_plan.vector_width > 1 and loop_plan.axis != outputs[0].shape.rank - 1) {
+                        @compileError("vector loop execution requires the innermost axis");
+                    }
+                    for (loop_plan.iterations) |iteration| {
+                        if (iteration.offsets.len + 1 != outputs[0].shape.rank) {
+                            @compileError("loop offsets must cover every non-loop axis");
+                        }
+                        switch (iteration.boundary) {
+                            .wrap => {},
+                            .redirect => |redirect| if (redirect >= loop_plan.iterations.len) {
+                                @compileError("loop redirect is outside the loop-axis extent");
+                            },
+                        }
+                    }
+                    if (expression) |program| {
+                        validateElementwiseProgramForShape(program, inputs, plan.region.domain.shape, outputs[0].dtype);
+                        validateExpressionResult(program, loop_plan.value, inputs, outputs[0].dtype);
+                    } else switch (loop_plan.value) {
+                        .input => |index| {
+                            if (index >= inputs.len or inputs[index].dtype != outputs[0].dtype) {
+                                @compileError("loop transfer input must match its output dtype");
+                            }
+                        },
+                        .instruction, .accumulator => @compileError("loop transfer must reference an input"),
+                    }
+                },
             }
-            if (plan.traversal_plan.vector_width == 0 or plan.traversal_plan.unroll == 0) {
-                @compileError("map traversal factors must be nonzero");
+        }
+
+        fn validateSegmentedMap(
+            comptime plan: Plan.MapPlan.SegmentedPlan,
+            comptime expression: ?fusion.Program,
+            comptime inputs: anytype,
+            comptime outputs: anytype,
+        ) void {
+            requireOutputCount(outputs.len, 1);
+            if (plan.segments.len == 0) @compileError("segmented map plan requires at least one segment");
+            if (plan.vector_width == 0) @compileError("segmented map vector width must be nonzero");
+            const output = outputs[0];
+            var written_elements: usize = 0;
+            for (plan.segments) |segment| {
+                if (segment.rank != output.shape.rank) @compileError("remap segment rank must match its output");
+                var destination_max: isize = @intCast(segment.destination_offset);
+                for (0..segment.rank) |axis| {
+                    const extent = segment.extents[axis];
+                    if (extent == 0) @compileError("remap segment extents must be nonzero");
+                    const distance: isize = @intCast(extent - 1);
+                    const destination_delta = distance * segment.destination_strides[axis];
+                    if (destination_delta < 0 and destination_max + destination_delta < 0) @compileError("remap destination geometry is outside storage");
+                    destination_max += @max(destination_delta, 0);
+                }
+                const destination_bounds = viewBounds(output);
+                if (segment.destination_offset < destination_bounds.minimum or destination_max > destination_bounds.maximum) {
+                    @compileError("remap destination geometry is outside its output view");
+                }
+                if (segment.expression_value) |value| {
+                    const program = expression orelse @compileError("expression segment requires an expression body");
+                    const shape = segment.expression_shape[0..segment.expression_rank];
+                    validateElementwiseProgramForShape(program, inputs, shape, output.dtype);
+                    validateExpressionResult(program, value, inputs, output.dtype);
+                    var expression_max: isize = @intCast(segment.expression_offset);
+                    for (0..segment.rank) |axis| {
+                        const delta = @as(isize, @intCast(segment.extents[axis] - 1)) * segment.expression_strides[axis];
+                        if (delta < 0 and expression_max + delta < 0) @compileError("composed expression access is outside its domain");
+                        expression_max += @max(delta, 0);
+                    }
+                    var expression_elements: usize = 1;
+                    for (shape) |extent| expression_elements *= extent;
+                    if (expression_max >= expression_elements) @compileError("composed expression access is outside its domain");
+                } else {
+                    if (segment.input >= inputs.len) @compileError("remap segment refers to an unknown input");
+                    if (inputs[segment.input].dtype != output.dtype) @compileError("remap input and output dtypes must match");
+                    var source_max: isize = @intCast(segment.source_offset);
+                    for (0..segment.rank) |axis| {
+                        const delta = @as(isize, @intCast(segment.extents[axis] - 1)) * segment.source_strides[axis];
+                        if (delta < 0 and source_max + delta < 0) @compileError("remap source geometry is outside storage");
+                        source_max += @max(delta, 0);
+                    }
+                    const source_bounds = viewBounds(inputs[segment.input]);
+                    if (segment.source_offset < source_bounds.minimum or source_max > source_bounds.maximum) {
+                        @compileError("remap source geometry is outside its input view");
+                    }
+                }
+                written_elements += segment.elementCount();
             }
-            if (plan.traversal_plan.axis_order.len != outputs[0].shape.rank) {
-                @compileError("map traversal plan must order every output axis");
+            if (written_elements != output.shape.elementCount()) {
+                @compileError("remap segments must cover the output exactly once");
             }
-            var seen: [capacity.max_rank]bool = @splat(false);
-            for (plan.traversal_plan.axis_order) |axis| {
-                if (axis >= outputs[0].shape.rank or seen[axis]) @compileError("map axis order is invalid");
-                seen[axis] = true;
+        }
+
+        fn validateContractionPlan(comptime plan: Plan.ContractionPlan, comptime inputs: anytype, comptime outputs: anytype) void {
+            requireOutputCount(outputs.len, 1);
+            if (inputs.len != 2) @compileError("contraction plan requires two inputs");
+            if (plan.region.loads.len != inputs.len) @compileError("contraction loads must match invocation inputs");
+            for (plan.region.loads, 0..) |load, index| {
+                if (load.input != index or load.access != .logical) {
+                    @compileError("contraction loads must identify logical invocation inputs in order");
+                }
             }
-            if (plan.traversal_plan.vector_axis) |axis| {
-                if (axis >= outputs[0].shape.rank) @compileError("map vector axis is outside the output rank");
-            } else if (plan.traversal_plan.vector_width != 1) {
-                @compileError("scalar map traversal plans must have vector width one");
+            if (plan.region.stores.len != 1) @compileError("contraction plan requires one store");
+            const store = plan.region.stores[0];
+            if (store.output != 0 or store.access != .logical or store.value != .contraction) {
+                @compileError("contraction result must store directly to output zero");
             }
+            if (!std.mem.eql(usize, plan.region.domain.shape, outputs[0].shape.slice())) {
+                @compileError("contraction domain must match its output shape");
+            }
+            validateSemantic(.matmul, inputs, outputs[0]);
+            matmul.validate(plan, inputs[0], inputs[1], outputs[0]);
+        }
+
+        fn viewBounds(comptime info: anytype) struct { minimum: usize, maximum: isize } {
+            var minimum: isize = @intCast(info.layout.offset);
+            var maximum: isize = @intCast(info.layout.offset);
+            for (info.shape.slice(), info.layout.strides[0..info.shape.rank]) |extent, stride| {
+                const delta = @as(isize, @intCast(extent - 1)) * stride;
+                minimum += @min(delta, 0);
+                maximum += @max(delta, 0);
+            }
+            if (minimum < 0) @compileError("tensor view addresses storage before its origin");
+            return .{ .minimum = @intCast(minimum), .maximum = maximum };
         }
 
         fn validateReductionPlan(comptime plan: Plan.ReductionPlan, comptime inputs: anytype, comptime outputs: anytype) void {
             const region = plan.region;
             const traversal_plan = plan.traversal_plan;
-            const rank = region.domain_shape.len;
+            const rank = region.domain.shape.len;
 
             if (outputs.len == 0) @compileError("reduction plan requires an output");
             if (plan.region.stores.len != outputs.len) @compileError("reduction stores must match invocation outputs");
             if (plan.region.accumulators.len == 0) @compileError("reduction plan requires an accumulator");
+            if (region.loads.len != inputs.len) @compileError("reduction loads must match invocation inputs");
+            for (region.loads, 0..) |load, index| {
+                if (load.input != index or load.access != .logical) {
+                    @compileError("reduction loads must identify logical invocation inputs in order");
+                }
+            }
             if (rank > 64 or region.reduction_axes == 0 or
                 (rank < 64 and region.reduction_axes >= (@as(u64, 1) << @intCast(rank))))
             {
                 @compileError("reduction plan axes are outside its domain rank");
             }
-            for (region.domain_shape) |extent| {
+            for (region.domain.shape) |extent| {
                 if (extent == 0) @compileError("reduction domain extents must be nonzero");
             }
 
@@ -235,13 +420,13 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
             if (dtype.kind() == .boolean) @compileError("reduction plans require a numeric dtype");
             for (inputs) |input| {
                 if (input.dtype != dtype) @compileError("reduction expression inputs must match the output dtype");
-                if (!broadcastsToShape(input, region.domain_shape)) {
+                if (!broadcastsToShape(input, region.domain.shape)) {
                     @compileError("reduction expression input does not broadcast to the reduction domain");
                 }
             }
             for (outputs) |output| {
                 if (output.dtype != dtype) @compileError("reduction outputs must have matching dtypes");
-                if (!isReductionOutputShape(region.domain_shape, region.reduction_axes, region.keep_dims, output)) {
+                if (!isReductionOutputShape(region.domain.shape, region.reduction_axes, region.keep_dims, output)) {
                     @compileError("reduction output shape does not match its domain and axes");
                 }
             }
@@ -266,9 +451,10 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
                 if (store.output >= outputs.len) @compileError("reduction store refers to an unknown output");
                 if (stored_outputs[store.output]) @compileError("reduction output has more than one store");
                 stored_outputs[store.output] = true;
+                if (store.access != .logical) @compileError("reduction stores require logical access");
                 const accumulator_index = switch (store.value) {
                     .accumulator => |index| index,
-                    .input, .instruction => @compileError("reduction stores must refer to accumulators"),
+                    .expression, .contraction, .transfer => @compileError("reduction stores must refer to accumulators"),
                 };
                 if (accumulator_index >= region.accumulators.len) {
                     @compileError("reduction store refers to an unknown accumulator");
@@ -293,11 +479,11 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
                 if (region.reduction_axes & (@as(u64, 1) << @intCast(axis)) == 0) {
                     @compileError("reduction vector axis must be a reduced axis");
                 }
-                if (region.domain_shape[axis] < traversal_plan.vector_width) {
+                if (region.domain.shape[axis] < traversal_plan.vector_width) {
                     @compileError("reduction vector axis is shorter than its vector width");
                 }
                 for (inputs) |input| {
-                    if (!supportsReductionVectorAxis(input, region.domain_shape, axis)) {
+                    if (!supportsReductionVectorAxis(input, region.domain.shape, axis)) {
                         @compileError("reduction input is neither contiguous nor broadcast on its vector axis");
                     }
                 }
@@ -321,7 +507,7 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
         fn validateReductionExpressions(
             comptime program: fusion.Program,
             comptime input_count: usize,
-            comptime dtype: @import("../dtype.zig").Dtype,
+            comptime dtype: @import("../storage/dtype.zig").Dtype,
         ) void {
             for (program.instructions, 0..) |instruction, instruction_index| {
                 if (instruction.dtype != dtype) {
@@ -411,12 +597,22 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
         }
 
         fn validateElementwiseProgram(comptime program: fusion.Program, comptime inputs: anytype, comptime output: anytype) void {
+            validateElementwiseProgramForShape(program, inputs, output.shape.slice(), output.dtype);
+        }
+
+        fn validateElementwiseProgramForShape(
+            comptime program: fusion.Program,
+            comptime inputs: anytype,
+            comptime shape: []const usize,
+            comptime output_dtype: @import("../storage/dtype.zig").Dtype,
+        ) void {
             if (program.instructions.len == 0) @compileError("fused elementwise program must contain an instruction");
-            for (inputs) |input| {
-                if (!broadcastsTo(input, output)) @compileError("fused elementwise input does not broadcast to its output shape");
+            for (inputs, 0..) |input, input_index| {
+                if (!programUsesInput(program, input_index)) continue;
+                if (!broadcastsToShape(input, shape)) @compileError("fused elementwise input does not broadcast to its output shape");
             }
             for (program.instructions, 0..) |instruction, instruction_index| {
-                var operand_dtypes: [instruction.operation.arity()]@import("../dtype.zig").Dtype = undefined;
+                var operand_dtypes: [instruction.operation.arity()]@import("../storage/dtype.zig").Dtype = undefined;
                 for (instruction.args[0..instruction.operation.arity()], 0..) |reference, operand_index| {
                     switch (reference) {
                         .input => |input_index| {
@@ -441,19 +637,35 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
                     @compileError("fused pointwise instruction result dtype is invalid");
                 }
             }
-            if (program.instructions[program.instructions.len - 1].dtype != output.dtype) {
+            if (program.instructions[program.instructions.len - 1].dtype != output_dtype) {
                 @compileError("fused pointwise program result dtype does not match its output");
             }
         }
 
-        fn broadcastsTo(input: anytype, output: anytype) bool {
-            if (input.shape.rank > output.shape.rank) return false;
-            for (0..input.shape.rank) |axis_from_end| {
-                const input_extent = input.shape.at(input.shape.rank - 1 - axis_from_end);
-                const output_extent = output.shape.at(output.shape.rank - 1 - axis_from_end);
-                if (input_extent != 1 and input_extent != output_extent) return false;
+        fn validateExpressionResult(
+            comptime program: fusion.Program,
+            comptime value: fusion.Program.ValueRef,
+            comptime inputs: anytype,
+            comptime output_dtype: @import("../storage/dtype.zig").Dtype,
+        ) void {
+            const dtype = switch (value) {
+                .input => |index| if (index < inputs.len) inputs[index].dtype else @compileError("expression result refers to an unknown input"),
+                .instruction => |index| if (index < program.instructions.len) program.instructions[index].dtype else @compileError("expression result refers to an unknown instruction"),
+                .accumulator => @compileError("map expressions cannot refer to accumulators"),
+            };
+            if (dtype != output_dtype) @compileError("composed expression result dtype does not match its output");
+        }
+
+        fn programUsesInput(comptime program: fusion.Program, comptime input_index: usize) bool {
+            for (program.instructions) |instruction| {
+                for (instruction.args[0..instruction.operation.arity()]) |reference| {
+                    switch (reference) {
+                        .input => |index| if (index == input_index) return true,
+                        .instruction, .accumulator => {},
+                    }
+                }
             }
-            return true;
+            return false;
         }
     };
 }

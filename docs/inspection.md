@@ -72,6 +72,7 @@ zgc-inspect all
 zgc-inspect --model 'model-name' executable
 zgc-inspect summary
 zgc-inspect raw-graph
+zgc-inspect semantic-graph
 zgc-inspect executable
 zgc-inspect representations
 zgc-inspect tree

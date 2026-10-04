@@ -1,19 +1,67 @@
 const std = @import("std");
-const ContractionPlan = @import("../execution/kernel_plan.zig").ContractionPlan;
-const Graph = @import("../graph.zig");
-const Tensor = @import("../tensor.zig");
+const Region = @import("../optimization/regions/root.zig");
+const RegionAccess = @import("../optimization/regions/access.zig");
+const Graph = @import("../../core/graph.zig");
+const Tensor = @import("../../core/tensor.zig");
 
-/// Fully selected matmul execution policy. No geometry-dependent selection is
-/// performed when the model runs.
-pub const Plan = ContractionPlan;
+/// Concrete kernel strategy selected for a logical contraction region.
+pub const Plan = struct {
+    region: Region.Contraction,
+    strategy: Strategy,
+
+    pub const Strategy = enum {
+        output_columns,
+        contracted_axis,
+        output_rows,
+        scalar,
+    };
+};
 
 pub fn plan(
     comptime capacity: Graph.Capacity,
     lhs: Tensor.Info(capacity.max_rank),
     rhs: Tensor.Info(capacity.max_rank),
     output: Tensor.Info(capacity.max_rank),
+    region: Region.Contraction,
 ) Plan {
-    return .{ .strategy = selectStrategy(capacity, lhs, rhs, output) };
+    return .{
+        .region = region,
+        .strategy = selectStrategy(capacity, lhs, rhs, output),
+    };
+}
+
+/// Build the concrete contraction plan and its executable tensor bindings.
+pub fn planned(
+    comptime capacity: Graph.Capacity,
+    comptime graph: anytype,
+    comptime lhs_id: usize,
+    comptime rhs_id: usize,
+    comptime output_id: usize,
+) type {
+    const output = graph.tensors[output_id].?;
+    const domain_shape = output.shape.dims[0..output.shape.rank].*;
+    const loads = [_]RegionAccess.Load{
+        .{ .input = 0 },
+        .{ .input = 1 },
+    };
+    const stores = [_]RegionAccess.Store{.{
+        .output = 0,
+        .value = .contraction,
+    }};
+    const selected = plan(
+        capacity,
+        graph.tensors[lhs_id].?,
+        graph.tensors[rhs_id].?,
+        output,
+        .{
+            .domain = .{ .shape = &domain_shape },
+            .loads = &loads,
+            .stores = &stores,
+        },
+    );
+    return struct {
+        pub const kernel_plan: Plan = selected;
+    };
 }
 
 pub fn selectOutputLayout(
@@ -24,7 +72,7 @@ pub fn selectOutputLayout(
     shape: Tensor.Shape(capacity.max_rank),
     comptime analysis: anytype,
 ) Tensor.Layout(capacity.max_rank) {
-    packWeights(capacity, graph, rhs_id, analysis);
+    packWeights(graph, rhs_id, analysis);
 
     const vector_len = std.simd.suggestVectorLength(f32) orelse return .contiguous(shape);
     if (shape.rank != 2 or shape.at(0) < vector_len) return .contiguous(shape);
@@ -64,7 +112,7 @@ fn selectStrategy(
     lhs: Tensor.Info(capacity.max_rank),
     rhs: Tensor.Info(capacity.max_rank),
     output: Tensor.Info(capacity.max_rank),
-) ContractionPlan.Strategy {
+) Plan.Strategy {
     if (rhs.layout.strides[1] == 1 and output.layout.strides[1] == 1) return .output_columns;
     if (lhs.layout.strides[1] == 1 and rhs.layout.strides[0] == 1) return .contracted_axis;
     if (lhs.layout.strides[0] == 1 and output.layout.strides[0] == 1) return .output_rows;
@@ -72,12 +120,10 @@ fn selectStrategy(
 }
 
 fn packWeights(
-    comptime capacity: Graph.Capacity,
     graph: anytype,
     comptime rhs_id: Tensor.Id,
     comptime analysis: anytype,
 ) void {
-    _ = capacity;
     if (analysis.use_counts[rhs_id] != 1) return;
     var rhs = &graph.tensors[rhs_id].?;
     if (rhs.shape.rank != 2 or rhs.storage_tensor != rhs_id) return;

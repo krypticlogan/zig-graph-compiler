@@ -1,4 +1,4 @@
-const Dtype = @import("../zgc/dtype.zig").Dtype;
+const Dtype = @import("../zgc/storage/dtype.zig").Dtype;
 
 pub const Layout = enum {
     channels_last,
@@ -18,7 +18,7 @@ pub const Dimensions = struct {
             dimensions.width == 0 or
             dimensions.channels == 0)
         {
-            @compileError("zgc.img dimensions must be greater than zero");
+            @compileError("zgc.ext.img dimensions must be greater than zero");
         }
         return switch (dimensions.layout) {
             .channels_last => .{

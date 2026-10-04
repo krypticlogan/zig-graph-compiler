@@ -12,15 +12,15 @@ unless stated otherwise. Supported dtypes are `f32`, `f16`, `i8`, and `bool`.
 The model-definition surface uses concrete parameter types so editor tooling
 can expose accepted fields and scalar types:
 
-| Methods | Parameter contract |
-| --- | --- |
-| `scalar`, `full` | `value` has the scalar type selected by the compile-time `dtype` argument |
-| `sum`, `mean`, `min`, `max` | `ReductionOptions` with `axes: ?[]const i8` and `keep_dims: bool` |
-| `flatten` | `FlattenOptions` |
-| `slice` | `SliceOptions` |
-| `pad` | `PadOptions` |
-| `windows` | `WindowOptions` |
-| `modelWith` | `[]const SourceOverride`, whose entries contain a source-enum value and `Source.Binding` |
+| Methods                     | Parameter contract                                                                       |
+| --------------------------- | ---------------------------------------------------------------------------------------- |
+| `scalar`, `full`            | `value` has the scalar type selected by the compile-time `dtype` argument                |
+| `sum`, `mean`, `min`, `max` | `ReductionOptions` with `axes: ?[]const i8` and `keep_dims: bool`                        |
+| `flatten`                   | `FlattenOptions`                                                                         |
+| `slice`                     | `SliceOptions`                                                                           |
+| `pad`                       | `PadOptions`                                                                             |
+| `windows`                   | `WindowOptions`                                                                          |
+| `modelWith`                 | `[]const SourceOverride`, whose entries contain a source-enum value and `Source.Binding` |
 
 Options may use inferred struct literals because the method signature supplies
 their concrete type. For example, a single-axis reduction is
@@ -138,9 +138,12 @@ uses a numerically stable shifted exponential calculation.
 extents outside the selected axis must match. The output extent on that axis is
 the sum of the corresponding input extents.
 
-Concatenation materializes a new contiguous tensor. Generated contiguous views
-use fixed block copies; other layouts use static strided traversal. Inputs are
-never expanded or copied into temporary tensors.
+Concatenation semantically produces a new contiguous tensor. Its direct
+implementation uses fixed block copies for contiguous inputs and static
+strided traversal otherwise. Executable search may instead compose nested
+concatenations and compatible shifts into one segmented remap that writes leaf
+views directly into the final output, leaving intermediate concatenation
+results unmaterialized.
 
 ## Structural views
 

@@ -1,11 +1,11 @@
 # Zig Graph Compiler
 
-ZGC is an allocation-free ahead-of-time tensor computation graph compiler written in Zig.  
-A graph architecture is defined at compile time,  
-lowered and optimized to a fixed execution graph,  
-assigned an inline memory plan,  
-and emitted as a specialized Zig type.  
-  
+ZGC is an allocation-free ahead-of-time tensor computation graph compiler written in Zig.
+A graph architecture is defined at compile time,
+lowered and optimized to a fixed execution graph,
+assigned an inline memory plan,
+and emitted as a specialized Zig type.
+
 The binary is the model: graph traversal, tensor ranks, shapes, dtypes, layouts,
 and kernel selection are compile-time-known.
 
@@ -19,6 +19,8 @@ The project targets Zig 0.16.0.
 - Exact graph capacities derived directly from the model.
 - Lifetime-planned, reusable inline model memory with no heap allocation during
   execution.
+- Compact optimized semantic graphs with dead-node elimination, provenance,
+  structural canonicalization, and scalar folding.
 - Multiple graph inputs, parameters, constants, and outputs.
 - Source-free scalar literals and storage-efficient zero-stride filled tensors.
 - `f32`, `f16`, `i8`, and strict boolean tensor dtypes.
@@ -27,6 +29,8 @@ The project targets Zig 0.16.0.
 - Explicit copy and row-major contiguous materialization.
 - Zero-copy overlapping windows over views and shape-preserving shifts with
   wrap, edge, reflect, or constant boundaries.
+- Optional segmented remap lowering for composed shift, slice, and
+  concatenation data movement.
 - Static-geometry model views and dynamic low-level views for contiguous,
   offset, broadcast, transposed, and generally strided layouts.
 - Transpose, permutation, reshape, flatten, squeeze, unsqueeze, and static slicing view operations.
@@ -46,11 +50,13 @@ See [development state](docs/development-state.md) for precise limitations and
 ## Installation & usage
 
 In a Zig project directory:
+
 ```bash
 zig fetch --save git+https://github.com/krypticlogan/zgc
 ```
 
 Add to your build.zig:
+
 ```zig
 const zgc_dep = b.dependency("zgc", .{
     .target = target,
@@ -58,10 +64,13 @@ const zgc_dep = b.dependency("zgc", .{
 });
 const zgc_mod = zgc_dep.module("zgc");
 ```
+
 Then, add the module as an import to your own module.
+
 ```zig
 exe.root_module.addImport("zgc", zgc_mod);
 ```
+
 Finally, you may import the zgc module to your own.
 
 ## Defining a model
@@ -80,7 +89,11 @@ const Definition = zgc.DefinitionBuilder(Sources, .{ .max_rank = 2 });
 fn define(builder: *Definition) void { // complete graph architecture is defined here
     const input = builder.input(.input, .f32, &.{ 4, 8 });
     const weights = builder.parameter(.weights, .f32, &.{ 8, 16 });
-    builder.output(builder.relu(builder.matmul(input, weights)));
+    builder.output(
+        builder.relu(
+            builder.matmul(input, weights)
+        )
+    );
 }
 
 const definition = blk: {
@@ -114,12 +127,12 @@ construction and memory planning.
 
 ### Neural-network layers
 
-`zgc.nn` composes higher-level layers through `DefinitionBuilder`; it does not
+`zgc.ext.nn` composes higher-level layers through `DefinitionBuilder`; it does not
 provide a separate tensor runtime.
 
 ```zig
-const Dense = zgc.nn.Dense(Sources);
-const Classifier = zgc.nn.Sequential(&[_]Dense{
+const Dense = zgc.ext.nn.Dense(Sources);
+const Classifier = zgc.ext.nn.Sequential(&[_]Dense{
     .{ .weights = .w1, .bias = .b1, .output_size = 16, .activation = .relu },
     .{ .weights = .w2, .bias = .b2, .output_size = 10, .activation = .softmax },
 });
@@ -134,8 +147,8 @@ layer adds an aliasing transpose before matmul.
 
 ### Image-processing pipelines
 
-`zgc.img.Dimensions` defines channel-first or channel-last rank-4 shapes, and
-`zgc.img.input` declares a core graph input with that convention.
+`zgc.ext.img.Dimensions` defines channel-first or channel-last rank-4 shapes,
+and `zgc.ext.img.input` declares a core graph input with that convention.
 
 ## Source storage
 
@@ -147,7 +160,7 @@ Parameters and constants may instead be embedded directly into the program:
 
 ```zig
 const EmbeddedModel = definition.modelWith(&.{
-    .{ .source = .weights, .binding = zgc.Source.embed(@embedFile("weights.bin")) },
+    .{ .source = .weights, .binding = zgc.memory.Source.embed(@embedFile("weights.bin")) },
 });
 ```
 
@@ -162,8 +175,8 @@ Inputs can also borrow caller-owned runtime storage without a copy:
 
 ```zig
 const BorrowingModel = definition.modelWith(&.{
-    .{ .source = .input, .binding = zgc.Source.bound },
-    .{ .source = .weights, .binding = zgc.Source.embed(@embedFile("weights.bin")) },
+    .{ .source = .input, .binding = zgc.memory.Source.bound },
+    .{ .source = .weights, .binding = zgc.memory.Source.embed(@embedFile("weights.bin")) },
 });
 
 var model = BorrowingModel.init();
@@ -219,24 +232,25 @@ https://github.com/user-attachments/assets/4764d198-9650-4db1-b541-27d46fec85e2
 
 https://github.com/user-attachments/assets/1c3cbe07-377e-42a5-aab2-9fd6ec340f38
 
-
 ## Repository layout
 
-| Path | Purpose |
-| --- | --- |
-| `src/zgc/pipeline/` | Definition, construction, analysis, scheduling, executable planning, validation, and orchestration |
-| `src/zgc/operations/` | Semantic operation definitions and reusable operation-family descriptors |
-| `src/zgc/optimization/` | Executable plans and optimization-specific representations |
-| `src/zgc/kernels/` | Elementwise, reduction, contraction, layout, and special kernels |
-| `src/zgc/` | Graph, tensor/view, storage, execution, and generated-model machinery |
-| `src/cli/` | Model-specific command-line entry points |
-| `src/artifact/` | Generated-model artifact entry points |
-| `src/extensions/` | Core-backed domain abstractions exported as `zgc.nn` and `zgc.img` |
-| `tests/` | Compile-time graph, runtime model, validation, view, and kernel coverage |
-| `benchmarks/` | Operation and generated-model benchmark harness, with recorded results |
-| `examples/` | Standalone model definitions, interactive applications, inspection, and artifact analysis |
-| `playground/` | Standalone scratch package for graph construction, execution, testing, inspection, and disassembly |
-| `docs/` | Architecture, design constraints, capabilities, and limitations |
+| Path                    | Purpose                                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
+| `src/zgc/frontend/`     | Public definition types and the typed graph-building surface                                        |
+| `src/zgc/compiler/`     | Construction, validation, analysis, optimization, planning, scheduling, and executable search       |
+| `src/zgc/core/`         | Graph, tensor/view, model, and inspection structures                                                |
+| `src/zgc/execution/`    | Executable programs, kernel plans, and dispatch                                                     |
+| `src/zgc/operations/`   | Semantic operation definitions and reusable operation-family descriptors                           |
+| `src/zgc/kernels/`      | Elementwise, reduction, contraction, layout, and special kernels                                   |
+| `src/zgc/storage/`      | Dtypes, source policies, and memory planning                                                        |
+| `src/cli/`              | Model-specific command-line entry points                                                           |
+| `src/artifact/`         | Generated-model artifact entry points                                                              |
+| `src/extensions/`       | Optional domain abstractions exported through `zgc.ext.nn` and `zgc.ext.img`                       |
+| `tests/`                | Compile-time graph, runtime model, validation, view, and kernel coverage                           |
+| `benchmarks/`           | Operation and generated-model benchmark harness, with recorded results                             |
+| `examples/`             | Standalone model definitions, interactive applications, inspection, and artifact analysis          |
+| `playground/`           | Standalone scratch package for graph construction, execution, testing, inspection, and disassembly |
+| `docs/`                 | Architecture, design constraints, capabilities, and limitations                                    |
 
 ## Documentation
 

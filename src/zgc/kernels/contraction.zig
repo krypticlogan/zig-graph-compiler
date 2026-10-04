@@ -1,6 +1,6 @@
 const std = @import("std");
 const accumulation = @import("accumulation.zig");
-const ContractionPlan = @import("../execution/kernel_plan.zig").ContractionPlan;
+const ContractionPlan = @import("../execution/execution.zig").ContractionPlan;
 pub const Strategy = ContractionPlan.Strategy;
 
 /// Execute one compile-time-selected traversal.

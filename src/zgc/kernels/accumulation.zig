@@ -1,5 +1,5 @@
 const std = @import("std");
-const Dtype = @import("../dtype.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 const Reduction = @import("../operations/reduction.zig");
 
 pub fn AccumulatorScalar(comptime dtype: Dtype) type {

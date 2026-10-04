@@ -1,6 +1,6 @@
 const std = @import("std");
-const Execution = @import("execution.zig");
-const Op = @import("operations/semantic.zig").Op;
+const Execution = @import("../execution/execution.zig");
+const Op = @import("../operations/semantic.zig").Op;
 const Tensor = @import("tensor.zig");
 
 const Writer = std.Io.Writer;
@@ -8,6 +8,7 @@ const Writer = std.Io.Writer;
 pub const Sections = struct {
     capacity: bool = true,
     raw_graph: bool = true,
+    semantic_graph: bool = true,
     executable: bool = true,
     structure: bool = true,
     memory_plan: bool = true,
@@ -28,17 +29,22 @@ pub fn writeModel(
         try writer.writeAll("== Raw graph ==\n");
         try writeGraph(writer, Model.raw_graph);
     }
-    if (sections.executable) {
+    if (sections.semantic_graph) {
         if (sections.capacity or sections.raw_graph) try writer.writeByte('\n');
+        try writer.writeAll("== Optimized semantic graph ==\n");
+        try writeGraph(writer, Model.semantic_graph);
+    }
+    if (sections.executable) {
+        if (sections.capacity or sections.raw_graph or sections.semantic_graph) try writer.writeByte('\n');
         try writer.writeAll("== Executable ==\n");
         try writeExecutable(writer, Model.executable);
     }
     if (sections.structure) {
-        if (sections.capacity or sections.raw_graph or sections.executable) try writer.writeByte('\n');
+        if (sections.capacity or sections.raw_graph or sections.semantic_graph or sections.executable) try writer.writeByte('\n');
         try writeExecutableStructure(writer, Model.executable);
     }
     if (sections.memory_plan) {
-        if (sections.capacity or sections.raw_graph or sections.executable or sections.structure) {
+        if (sections.capacity or sections.raw_graph or sections.semantic_graph or sections.executable or sections.structure) {
             try writer.writeByte('\n');
         }
         try writer.writeAll("== Memory plan ==\n");
@@ -282,6 +288,7 @@ pub fn runCli(
         try writeModel(Model, writer, .{
             .executable = false,
             .raw_graph = false,
+            .semantic_graph = false,
             .structure = false,
             .memory_plan = false,
         });
@@ -289,12 +296,22 @@ pub fn runCli(
         try writeModel(Model, writer, .{
             .capacity = false,
             .raw_graph = false,
+            .semantic_graph = false,
             .structure = false,
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "raw-graph")) {
         try writeModel(Model, writer, .{
             .capacity = false,
+            .semantic_graph = false,
+            .executable = false,
+            .structure = false,
+            .memory_plan = false,
+        });
+    } else if (std.mem.eql(u8, command, "semantic-graph")) {
+        try writeModel(Model, writer, .{
+            .capacity = false,
+            .raw_graph = false,
             .executable = false,
             .structure = false,
             .memory_plan = false,
@@ -309,6 +326,7 @@ pub fn runCli(
         try writeModel(Model, writer, .{
             .capacity = false,
             .raw_graph = false,
+            .semantic_graph = false,
             .executable = false,
             .memory_plan = false,
         });
@@ -316,6 +334,7 @@ pub fn runCli(
         try writeModel(Model, writer, .{
             .capacity = false,
             .raw_graph = false,
+            .semantic_graph = false,
             .executable = false,
             .structure = false,
         });
@@ -329,13 +348,14 @@ pub fn runCli(
 
 pub fn writeCliUsage(writer: *Writer) Writer.Error!void {
     try writer.writeAll(
-        \\usage: zgc-inspect [--model <declaration>] [all|summary|raw-graph|executable|representations|tree|memory-plan|help]
+        \\usage: zgc-inspect [--model <declaration>] [all|summary|raw-graph|semantic-graph|executable|representations|tree|memory-plan|help]
         \\
         \\  all          capacity, graph, executable, tree, and memory plan (default)
         \\  summary      exact graph capacity
         \\  raw-graph    semantic graph before optimization
+        \\  semantic-graph optimized semantic graph
         \\  executable   selected executable
-        \\  representations raw semantic graph and selected executable
+        \\  representations raw graph, optimized semantic graph, and selected executable
         \\  tree         output-oriented executable structure
         \\  memory-plan  owned, bound, and embedded tensor storage
         \\  help         show this message
@@ -391,7 +411,7 @@ fn writeTensorInfo(writer: *Writer, id: Tensor.Id, info: anytype) Writer.Error!v
     }
 }
 
-fn writeScalarValue(writer: *Writer, value: @import("dtype.zig").ScalarValue) Writer.Error!void {
+fn writeScalarValue(writer: *Writer, value: @import("../storage/dtype.zig").ScalarValue) Writer.Error!void {
     switch (value.data_type) {
         .f32 => try writer.print("f32({d})", .{value.get(.f32)}),
         .f16 => try writer.print("f16({d})", .{value.get(.f16)}),
@@ -417,7 +437,34 @@ fn writeOp(writer: *Writer, op: anytype) Writer.Error!void {
             .compute => |compute| switch (compute) {
                 .direct => |semantic| writeSemanticOp(writer, .{ .compute = semantic }),
                 .kernel => |plan| switch (plan) {
-                    .map => |map| writeElementwiseProgram(writer, map.region.expressions),
+                    .map => |map| switch (map.strategy) {
+                        .traversal => switch (map.region.body) {
+                            .expression => |expression| writeElementwiseProgram(writer, expression),
+                            .transfer, .expression_transfer => unreachable,
+                        },
+                        .segmented => |segmented| switch (map.region.body) {
+                            .transfer => writer.print(
+                                "map(segmented, segments={d})",
+                                .{segmented.segments.len},
+                            ),
+                            .expression_transfer => |expression| writer.print(
+                                "map(composed, instructions={d}, segments={d}, vector={d})",
+                                .{ expression.instructions.len, segmented.segments.len, segmented.vector_width },
+                            ),
+                            .expression => unreachable,
+                        },
+                        .loop => |loop_plan| switch (map.region.body) {
+                            .transfer => writer.print(
+                                "map(loop, iterations={d}, vector={d})",
+                                .{ loop_plan.iterations.len, loop_plan.vector_width },
+                            ),
+                            .expression_transfer => |expression| writer.print(
+                                "map(loop-composed, instructions={d}, iterations={d}, vector={d})",
+                                .{ expression.instructions.len, loop_plan.iterations.len, loop_plan.vector_width },
+                            ),
+                            .expression => unreachable,
+                        },
+                    },
                     .reduction => |reduction| writer.print(
                         "reduction(accumulators={d}, stores={d})",
                         .{ reduction.region.accumulators.len, reduction.region.stores.len },
@@ -477,6 +524,10 @@ fn writeSemanticOp(writer: *Writer, op: Op) Writer.Error!void {
                 }
                 try writer.print("], boundary={s})", .{@tagName(attrs.boundary)});
             },
+            .slice_loop => |attrs| try writer.print(
+                "slice_loop(axis={d}, iterations={d})",
+                .{ attrs.axis, attrs.iterations.len },
+            ),
             .matmul => try writer.writeAll("matmul"),
             .sum => |attrs| try writeReduction(writer, "sum", attrs),
             .mean => |attrs| try writeReduction(writer, "mean", attrs),
@@ -519,7 +570,7 @@ fn writeSemanticOp(writer: *Writer, op: Op) Writer.Error!void {
     }
 }
 
-fn writeElementwiseProgram(writer: *Writer, program: @import("optimization/fusion/expression.zig").Program) Writer.Error!void {
+fn writeElementwiseProgram(writer: *Writer, program: @import("../compiler/optimization/fusion/expression.zig").Program) Writer.Error!void {
     try writer.writeAll("fused_elementwise[");
     for (program.instructions, 0..) |instruction, index| {
         if (index != 0) try writer.writeAll(", ");

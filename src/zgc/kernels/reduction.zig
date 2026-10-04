@@ -1,5 +1,5 @@
 const accumulation = @import("accumulation.zig");
-const Dtype = @import("../dtype.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 const Op = @import("../operations/semantic.zig").Op;
 const ReductionOperation = @import("../operations/reduction.zig");
 const line = @import("line.zig");

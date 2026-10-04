@@ -1,5 +1,5 @@
 const std = @import("std");
-const Graph = @import("graph.zig");
+const Graph = @import("../core/graph.zig");
 const ScalarValue = @import("dtype.zig").ScalarValue;
 
 /// Compile-time storage selection for a graph source.

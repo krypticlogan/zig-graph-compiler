@@ -14,10 +14,11 @@ and execution.
   exact capacities used by graph lowering and memory planning.
 - Shape and operation compatibility errors are reported during compilation when
   their inputs are statically known.
-- Semantic validation checks the constructed graph before semantic, fusion,
-  and layout analysis. Fusion and layout analysis only advertise legal
-  alternatives; executable planning owns selection and lowering.
-- Executable planning retains an unfused generic reference candidate and a
+- Semantic validation checks the constructed graph before optimization and
+  analysis. Semantic analysis derives use, output, consumer-edge, and
+  topological-order facts. Fusion, layout, and remap analysis only advertise
+  legal alternatives; executable search owns selection and lowering.
+- Executable search retains an unfused generic reference candidate and a
   bounded Pareto frontier of scheduled executable alternatives.
 - Raw and semantic graphs, the active executable, the reference candidate,
   and executable-candidate selection metadata remain available for inspection. The
@@ -32,8 +33,8 @@ typed slice of `.source` and `.binding` overrides:
 
 ```zig
 const Model = definition.modelWith(&.{
-    .{ .source = .input, .binding = zgc.Source.bound },
-    .{ .source = .weights, .binding = zgc.Source.embed(weights_bytes) },
+    .{ .source = .input, .binding = zgc.memory.Source.bound },
+    .{ .source = .weights, .binding = zgc.memory.Source.embed(weights_bytes) },
 });
 ```
 
@@ -71,7 +72,7 @@ in the model's mutable memory plan.
 - Matmul parameter and constant right-hand sides retain logical `[K, N]` shape
   while optimization may store them output-major with physical strides `[1, K]`.
 - Generated matmuls carry a compile-time contraction plan selected during
-  executable planning from a candidate's concrete layouts. Semantic matmul
+  contraction planning from a candidate's concrete layouts. Semantic matmul
   nodes contain no kernel plan.
 - Kernel-local axis ordering, vectorization, accumulator lanes, and unrolling
   form a `TraversalPlan`; model-level ordering is the executable's node sequence.

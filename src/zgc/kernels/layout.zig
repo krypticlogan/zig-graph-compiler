@@ -1,7 +1,7 @@
 const std = @import("std");
 const op_module = @import("../operations/semantic.zig");
 const Op = op_module.Op;
-const Tensor = @import("../tensor.zig");
+const Tensor = @import("../core/tensor.zig");
 const validation = @import("../validation.zig");
 
 pub fn Result(comptime max_rank: usize) type {

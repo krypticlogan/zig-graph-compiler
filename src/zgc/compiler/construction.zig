@@ -1,6 +1,6 @@
-const Graph = @import("../graph.zig");
+const Graph = @import("../core/graph.zig");
 const Op = @import("../operations/semantic.zig").Op;
-const Tensor = @import("../tensor.zig");
+const Tensor = @import("../core/tensor.zig");
 const layout_ops = @import("../kernels/layout.zig");
 
 pub fn count(comptime Definition: type, comptime definition: Definition) Graph.Capacity {

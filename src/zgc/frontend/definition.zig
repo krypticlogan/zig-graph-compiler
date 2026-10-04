@@ -1,11 +1,11 @@
 const std = @import("std");
-const Dtype = @import("../dtype.zig").Dtype;
-const ScalarValue = @import("../dtype.zig").ScalarValue;
+const Dtype = @import("../storage/dtype.zig").Dtype;
+const ScalarValue = @import("../storage/dtype.zig").ScalarValue;
 const op_module = @import("../operations/semantic.zig");
 const Op = op_module.Op;
-const SourceStorage = @import("../source.zig");
-const Tensor = @import("../tensor.zig");
-const Capacity = @import("../graph.zig").Capacity;
+const SourceStorage = @import("../storage/source.zig");
+const Tensor = @import("../core/tensor.zig");
+const Capacity = @import("../core/graph.zig").Capacity;
 pub const Limits = struct {
     max_rank: usize = 8,
     max_nodes: usize = 64,
@@ -103,7 +103,7 @@ pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
         /// Run capacity counting, graph lowering, memory planning, and model
         /// generation for this completed definition.
         pub fn model(comptime definition: Self) type {
-            return @import("root.zig").model(
+            return @import("../compiler/root.zig").model(
                 Self,
                 definition,
                 @as([]const SourceOverride, &.{}),
@@ -112,7 +112,7 @@ pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
 
         /// Compile this definition with typed source-storage overrides.
         pub fn modelWith(comptime definition: Self, comptime sources: []const SourceOverride) type {
-            return @import("root.zig").model(Self, definition, sources);
+            return @import("../compiler/root.zig").model(Self, definition, sources);
         }
 
         pub fn counts(comptime definition: Definition) Capacity {
@@ -155,6 +155,12 @@ pub fn DefinitionBuilder(comptime SourceKey: type, comptime limits: Limits) type
             edge,
             reflect,
             constant: ValueType,
+        };
+        pub const SliceLoopIteration = Op.Compute.SliceLoopAttrs.Iteration;
+        pub const SliceLoopBoundary = Op.Compute.SliceLoopAttrs.Boundary;
+        pub const SliceLoopOptions = struct {
+            axis: i8,
+            iterations: []const SliceLoopIteration,
         };
 
         definition: DefinitionType = .{},
@@ -365,6 +371,20 @@ pub fn DefinitionBuilder(comptime SourceKey: type, comptime limits: Limits) type
                 .constant => |fill| self.addCompute(.{ .shift = attrs }, &.{ tensor, fill }),
                 else => self.addCompute(.{ .shift = attrs }, &.{tensor}),
             };
+        }
+
+        /// Apply one statically described transform per slice without
+        /// expanding the iterations into separate graph nodes.
+        pub fn sliceLoop(
+            self: *Self,
+            comptime tensor: ValueType,
+            comptime options: SliceLoopOptions,
+        ) ValueType {
+            const axis = normalizeAxis(tensor.shape.rank, options.axis);
+            return self.addCompute(.{ .slice_loop = .{
+                .axis = @intCast(axis),
+                .iterations = options.iterations,
+            } }, &.{tensor});
         }
 
         pub fn matmul(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {

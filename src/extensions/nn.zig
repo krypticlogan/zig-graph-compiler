@@ -41,13 +41,13 @@ pub fn Dense(comptime SourceKey: type) type {
             comptime input: @TypeOf(builder.*).TensorValue,
         ) @TypeOf(builder.*).TensorValue {
             if (input.shape.rank != 2) {
-                @compileError("zgc.nn.Dense requires a rank-2 [batch, features] input");
+                @compileError("zgc.ext.nn.Dense requires a rank-2 [batch, features] input");
             }
             if (layer.output_size == 0) {
-                @compileError("zgc.nn.Dense output_size must be greater than zero");
+                @compileError("zgc.ext.nn.Dense output_size must be greater than zero");
             }
             if (input.dtype != .f32) {
-                @compileError("zgc.nn.Dense currently supports only f32 tensors");
+                @compileError("zgc.ext.nn.Dense currently supports only f32 tensors");
             }
 
             const input_size = input.shape.at(1);
@@ -79,7 +79,7 @@ pub fn Dense(comptime SourceKey: type) type {
 /// `apply(builder, value)` function returning the builder's tensor value type.
 pub fn Sequential(comptime layers: anytype) type {
     if (layers.len == 0) {
-        @compileError("zgc.nn.Sequential requires at least one layer");
+        @compileError("zgc.ext.nn.Sequential requires at least one layer");
     }
 
     return struct {

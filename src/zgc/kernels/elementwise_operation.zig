@@ -1,4 +1,4 @@
-const Dtype = @import("../dtype.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 const Operation = @import("../operations/elementwise.zig").Operation;
 
 /// Arithmetic semantics for one elementwise instruction. Traversal kernels

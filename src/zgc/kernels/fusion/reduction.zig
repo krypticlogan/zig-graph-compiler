@@ -1,8 +1,8 @@
 const std = @import("std");
 const accumulation = @import("../accumulation.zig");
-const Dtype = @import("../../dtype.zig").Dtype;
-const ReductionPlan = @import("../../execution/kernel_plan.zig").ReductionPlan;
-const Expression = @import("../../optimization/fusion/expression.zig").Program;
+const Dtype = @import("../../storage/dtype.zig").Dtype;
+const ReductionPlan = @import("../../execution/execution.zig").ReductionPlan;
+const Expression = @import("../../compiler/optimization/fusion/expression.zig").Program;
 const elementwise = @import("../elementwise_operation.zig");
 
 /// Execute one statically planned multi-accumulator reduction region.
@@ -19,8 +19,8 @@ fn executeScalar(comptime plan: ReductionPlan, inputs: anytype, outputs: anytype
     const Output = @TypeOf(outputs[0]);
     const dtype = Output.dtype;
     const Accumulator = accumulation.AccumulatorScalar(dtype);
-    const rank = plan.region.domain_shape.len;
-    const domain_shape: [rank]usize = plan.region.domain_shape[0..rank].*;
+    const rank = plan.region.domain.shape.len;
+    const domain_shape: [rank]usize = plan.region.domain.shape[0..rank].*;
     const reduction_count = comptime reducedElementCount(domain_shape, plan.region.reduction_axes);
 
     for (0..outputs[0].len()) |output_linear| {
@@ -67,8 +67,8 @@ fn executeVectorized(comptime plan: ReductionPlan, inputs: anytype, outputs: any
     const vector_axis: usize = plan.traversal_plan.vector_axis.?;
     const Accumulator = accumulation.AccumulatorScalar(dtype);
     const VectorAccumulator = accumulation.AccumulatorVector(dtype, vector_width);
-    const rank = plan.region.domain_shape.len;
-    const domain_shape: [rank]usize = plan.region.domain_shape[0..rank].*;
+    const rank = plan.region.domain.shape.len;
+    const domain_shape: [rank]usize = plan.region.domain.shape[0..rank].*;
     const reduction_count = comptime reducedElementCount(domain_shape, plan.region.reduction_axes);
     const vector_axis_extent = domain_shape[vector_axis];
     const reduction_outer_count = reduction_count / vector_axis_extent;
@@ -162,8 +162,8 @@ fn evaluateScalar(
     coordinates: anytype,
 ) [plan.region.expressions.instructions.len]@TypeOf(inputs[0]).dtype.Scalar() {
     const dtype = @TypeOf(inputs[0]).dtype;
-    const rank = plan.region.domain_shape.len;
-    const domain_shape: [rank]usize = plan.region.domain_shape[0..rank].*;
+    const rank = plan.region.domain.shape.len;
+    const domain_shape: [rank]usize = plan.region.domain.shape[0..rank].*;
     var values: [plan.region.expressions.instructions.len]dtype.Scalar() = undefined;
     inline for (plan.region.expressions.instructions, 0..) |instruction, instruction_index| {
         var params: [instruction.operation.arity()]dtype.Scalar() = undefined;
@@ -181,8 +181,8 @@ fn evaluateVector(
     coordinates: anytype,
 ) [plan.region.expressions.instructions.len]@TypeOf(inputs[0]).dtype.Vector(plan.traversal_plan.vector_width) {
     const dtype = @TypeOf(inputs[0]).dtype;
-    const rank = plan.region.domain_shape.len;
-    const domain_shape: [rank]usize = plan.region.domain_shape[0..rank].*;
+    const rank = plan.region.domain.shape.len;
+    const domain_shape: [rank]usize = plan.region.domain.shape[0..rank].*;
     const vector_axis: usize = plan.traversal_plan.vector_axis.?;
     const vector_width = plan.traversal_plan.vector_width;
     var values: [plan.region.expressions.instructions.len]dtype.Vector(vector_width) = undefined;
@@ -217,7 +217,7 @@ fn storeResults(
     inline for (plan.region.stores) |store| {
         const accumulator_index = switch (store.value) {
             .accumulator => |index| index,
-            .input, .instruction => @compileError("reduction stores must reference an accumulator"),
+            .expression, .contraction, .transfer => @compileError("reduction stores must reference an accumulator"),
         };
         const accumulator = plan.region.accumulators[accumulator_index];
         const value = accumulation.finish(
@@ -321,15 +321,16 @@ fn domainCoordinatesExcludingAxis(
 }
 
 test "SIMD reductions support multiple combine operations and scalar tails" {
-    const Tensor = @import("../../tensor.zig");
+    const Tensor = @import("../../core/tensor.zig");
     const vector_width = std.simd.suggestVectorLength(f32) orelse 1;
     const len = vector_width + 1;
     const Input = Tensor.StaticConstView(f32, .{len}, .{1}, 0);
     const Output = Tensor.StaticView(f32, .{}, .{}, 0);
     const plan: ReductionPlan = .{
         .region = .{
+            .domain = .{ .shape = &.{len} },
+            .loads = &.{.{ .input = 0 }},
             .expressions = .{ .instructions = &.{} },
-            .domain_shape = &.{len},
             .reduction_axes = 1,
             .keep_dims = false,
             .accumulators = &.{

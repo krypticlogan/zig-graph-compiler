@@ -6,15 +6,19 @@ on Zig 0.16.0. The API should still be expected to change.
 
 ## Implementation roadmap
 
-1. Add dtype conversion and settle the tensor-index dtype.
-2. Build argmin/argmax and runtime-indexed gather operations.
-3. Generalize matmul to broadcastable batch dimensions with compile-time
+1. Define first-class composite operations from primitives for LayerNorm,
+   activation functions, and domain extensions.
+2. Generalize executable search so compatible composite alternatives can be
+   combined and explored together.
+3. Add dtype conversion and settle the tensor-index dtype.
+4. Build argmin/argmax and runtime-indexed gather operations.
+5. Generalize matmul to broadcastable batch dimensions with compile-time
    traversal plans.
-4. Build convolution, pooling, and specialized stencil lowering over static
+6. Build convolution, pooling, and specialized stencil lowering over static
    padding and window geometry.
-5. Implement constant folding, common-subexpression elimination, dead-node
-   elimination, algebraic simplification, and store/epilogue sinking.
-6. Introduce explicitly bounded runtime extents where they preserve static
+7. Expand algebraic simplification, add common-subexpression elimination, and
+   generalize store/epilogue sinking beyond remap regions.
+8. Introduce explicitly bounded runtime extents where they preserve static
    kernel specialization and memory planning.
 
 ## Implemented
@@ -25,21 +29,30 @@ on Zig 0.16.0. The API should still be expected to change.
 - Models are defined once and compiled with `definition.model()`.
 - Internal counting derives exact capacities within configurable definition
   bounds.
-- Raw graph construction preserves stable tensor IDs, source indices, operation
-  order, outputs, shapes, and dtypes.
-- Semantic validation and analysis feed fusion and layout analyses. Those
-  analyses emit candidate regions and regimes rather than rewriting one
+- Raw graph construction preserves definition tensor IDs, source indices,
+  operation order, outputs, shapes, and dtypes.
+- Semantic optimization compacts and renumbers the live graph while retaining
+  raw-to-optimized provenance. It eliminates dead nodes, normalizes structural
+  chains and concatenations, and folds scalar expressions and safe identities.
+- Semantic validation and analysis feed fusion, layout, and remap analyses.
+  Those analyses emit candidate regions and regimes rather than rewriting one
   canonical executable.
-- Executable planning combines those alternatives, realizes kernel plans,
+- Executable search combines those alternatives, realizes kernel plans,
   generates semantic, memory-pressure, and critical-path schedules, and keeps
   the generic reference candidate. Exact lifetime and memory planning precede
   structured costing and Pareto pruning.
 - Executable programs use multi-output invocation records. Compatible sibling
   reductions share one invocation and write independent results.
-- Generated model types retain raw and semantic graphs, the active executable,
-  a legal reference candidate, the candidate frontier, and deterministic
-  selection metadata for inspection. Use counts and output markers are
-  available from semantic analysis.
+- Compatible shift and concatenation regions lower to optional segmented map
+  programs that store leaf views directly into their final destination.
+- Segmented maps can compose a compatible pointwise producer into their source
+  access, removing the producer store, owned intermediate, and alias-only view
+  invocations.
+- Generated model types retain raw and compact semantic graphs, rewrite
+  provenance, the active executable, a legal reference candidate, the
+  candidate frontier, and deterministic selection metadata for inspection.
+  Use counts, output markers, consumer edges, and deterministic topological
+  ranks are available from semantic analysis.
 - Lifetime analysis consolidates alias uses onto storage roots and provides
   half-open intervals to memory planning.
 - Invalid ranks, shapes, axes, dtypes, input counts, and broadcasting are
@@ -57,31 +70,31 @@ on Zig 0.16.0. The API should still be expected to change.
 
 ### Operations
 
-| Operation | Support |
-| --- | --- |
-| Scalar/full | Source-free rank-zero literals and zero-stride filled-tensor aliases |
-| ReLU | SIMD over matching dense layouts and generic strided traversal; float and signed integer |
-| Exp | Floating-point tensors; SIMD over matching dense layouts and strided traversal |
-| Unary math | Floating-point negation, absolute value, square root, logarithm, and reciprocal |
-| Add/sub/mul/div | Matching numeric dtypes and trailing-axis broadcasting; div is floating-point |
-| Minimum/maximum/clamp | Elementwise numeric bounds with trailing-axis broadcasting |
-| Comparisons | Broadcast equality and ordered comparisons producing boolean tensors |
-| Boolean/selection | Strict logical operations and broadcast `where` selection |
-| Copy/contiguous | Fresh storage with lowering-selected or logical row-major layout |
-| Pad/shift/windows | Materialized constant padding, shifts with wrap/edge/reflect/constant boundaries, and zero-copy overlapping trailing-axis windows |
-| Matmul | Rank-2 tensors with contiguous and strided inputs/outputs; packed right-hand parameters and compile-time-selected native-width SIMD traversal |
-| Sum/mean/min/max | Compile-time single- or multi-axis reduction, optional retained dimensions, SIMD contiguous-axis traversal with scalar tails, and strided fallback; mean is floating-point |
-| Softmax | Stable single-axis floating-point implementation, including strided axes |
-| Concat | Matching-rank and matching-dtype inputs materialized along one compile-time axis |
-| Structural views | Transpose, permutation, reshape, flatten, squeeze, unsqueeze, slicing, and explicit broadcasting aliases with no runtime kernels |
+| Operation             | Support                                                                                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scalar/full           | Source-free rank-zero literals and zero-stride filled-tensor aliases                                                                                                       |
+| ReLU                  | SIMD over matching dense layouts and generic strided traversal; float and signed integer                                                                                   |
+| Exp                   | Floating-point tensors; SIMD over matching dense layouts and strided traversal                                                                                             |
+| Unary math            | Floating-point negation, absolute value, square root, logarithm, and reciprocal                                                                                            |
+| Add/sub/mul/div       | Matching numeric dtypes and trailing-axis broadcasting; div is floating-point                                                                                              |
+| Minimum/maximum/clamp | Elementwise numeric bounds with trailing-axis broadcasting                                                                                                                 |
+| Comparisons           | Broadcast equality and ordered comparisons producing boolean tensors                                                                                                       |
+| Boolean/selection     | Strict logical operations and broadcast `where` selection                                                                                                                  |
+| Copy/contiguous       | Fresh storage with lowering-selected or logical row-major layout                                                                                                           |
+| Pad/shift/windows     | Materialized constant padding, shifts with wrap/edge/reflect/constant boundaries, and zero-copy overlapping trailing-axis windows                                          |
+| Matmul                | Rank-2 tensors with contiguous and strided inputs/outputs; packed right-hand parameters and compile-time-selected native-width SIMD traversal                              |
+| Sum/mean/min/max      | Compile-time single- or multi-axis reduction, optional retained dimensions, SIMD contiguous-axis traversal with scalar tails, and strided fallback; mean is floating-point |
+| Softmax               | Stable single-axis floating-point implementation, including strided axes                                                                                                   |
+| Concat                | Matching-rank and matching-dtype inputs materialized along one compile-time axis; compatible trees may lower to one remap                                                  |
+| Structural views      | Transpose, permutation, reshape, flatten, squeeze, unsqueeze, slicing, and explicit broadcasting aliases with no runtime kernels                                           |
 
 ### Domain abstractions
 
-- `zgc.nn.Dense` declares weights and bias sources and expands to matmul, add,
+- `zgc.ext.nn.Dense` declares weights and bias sources and expands to matmul, add,
   and an optional core activation.
-- `zgc.nn.Sequential` composes graph-layer definitions in order.
+- `zgc.ext.nn.Sequential` composes graph-layer definitions in order.
 - Dense layers accept `[input, output]` or `[output, input]` parameter storage.
-- `zgc.img.Dimensions` and `zgc.img.input` provide channel-first and
+- `zgc.ext.img.Dimensions` and `zgc.ext.img.input` provide channel-first and
   channel-last rank-4 input conventions.
 
 ### Model and storage
@@ -114,11 +127,15 @@ on Zig 0.16.0. The API should still be expected to change.
 - Layout selection is limited to packed matmul right-hand parameters, the
   matmul batch heuristic, and compatible result propagation. Fusion forms
   single-consumer pointwise maps, producer-to-reduction regions, and compatible
-  sibling reductions. Search currently compares unfused/discovered fusion and
-  canonical/propagated layout regimes. Constant folding,
-  common-subexpression elimination, dead-node elimination, explicit
-  layout-conversion insertion, and contraction implementation enumeration are
-  not implemented. Candidate selection is deterministic and supplies the
+  sibling reductions. Search compares unfused/discovered fusion,
+  canonical/propagated layout, and direct/composed remap regimes. Scalar
+  folding and conservative identities are implemented; general
+  common-subexpression elimination, explicit layout-conversion insertion, and
+  contraction implementation enumeration are not. Remap composition currently
+  targets shifts and concatenation trees. Pointwise source composition requires
+  a canonical contiguous producer domain. Its segmented kernel vectorizes
+  compatible contiguous inner runs; general strided expression segments use
+  the scalar fallback. Candidate selection is deterministic and supplies the
   active executable.
 - Softmax and reductions traverse propagated layouts correctly, but do not yet
   have a dedicated batch-oriented lowering and kernel strategy for every axis.
@@ -140,6 +157,8 @@ The test suite exercises:
 - aligned memory planning and source loading;
 - reference/optimized schedule generation, structured cost comparison, and
   Pareto-frontier retention;
+- semantic graph compaction, provenance, dead-node removal, structural
+  canonicalization, scalar folding, and remap selection;
 - model execution and typed output access;
 - contiguous, offset, broadcast, transposed, and negative-stride views;
 - unary math, arithmetic, comparisons, boolean logic, selection, matmul,

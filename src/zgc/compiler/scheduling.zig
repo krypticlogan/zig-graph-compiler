@@ -1,6 +1,6 @@
-const Graph = @import("../graph.zig");
+const Graph = @import("../core/graph.zig");
 const Semantic = @import("../operations/semantic.zig");
-const Execution = @import("../execution.zig");
+const Execution = @import("../execution/execution.zig");
 const Executable = @import("../execution/program.zig").Executable;
 
 /// The policy used to choose a legal topological schedule.

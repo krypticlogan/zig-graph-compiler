@@ -1,20 +1,21 @@
 const std = @import("std");
 const rl = @import("raylib");
 const fluid = @import("fluid_model");
-const SmokeView = @import("smoke.zig").ParticleView(fluid.W, fluid.H);
 
-const cell_size = 4;
+const cell_size = 3;
 const header_height = 108;
 const arrow_spacing = 12;
 const screen_width: i32 = fluid.W * cell_size;
 const screen_height: i32 = fluid.H * cell_size + header_height;
 const population_count = fluid.H * fluid.W * 9;
+const smoke_population_count = fluid.H * fluid.W * 5;
 const cell_count = fluid.H * fluid.W;
-const weights = [9]f32{ 4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0 };
+const fluid_weights = [9]f32{ 4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0 };
+const smoke_weights = [5]f32{ 1.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0 };
 const cx = [9]f32{ 0, 1, 0, -1, 0, 1, -1, -1, 1 };
 const cy = [9]f32{ 0, 0, 1, 0, -1, 1, 1, -1, -1 };
 const Field = enum { speed, density };
-const View = enum { data, particles };
+const View = enum { smoke, data };
 
 pub fn main() void {
     rl.setTraceLogLevel(.err);
@@ -22,99 +23,97 @@ pub fn main() void {
     defer rl.closeWindow();
     rl.setTargetFPS(60);
 
-    var model = fluid.FluidStep.init();
+    var model = fluid.FluidSmokeStep.init();
     model.copySource(.cx, &cx) catch unreachable;
     model.copySource(.cy, &cy) catch unreachable;
-    model.copySource(.weights, &weights) catch unreachable;
+    model.copySource(.fluid_weights, &fluid_weights) catch unreachable;
+    model.copySource(.smoke_weights, &smoke_weights) catch unreachable;
 
     var populations: [population_count]f32 = undefined;
+    var smoke_populations: [smoke_population_count]f32 = @splat(0);
+    var smoke_injection: [cell_count]f32 = undefined;
     var force_x: [cell_count]f32 = @splat(0);
     var force_y: [cell_count]f32 = @splat(0);
     seedVortices(&populations);
+    seedSmokeEmitter(&smoke_injection);
     var omega: f32 = 1.0;
-    advance(&model, &populations, &force_x, &force_y, omega);
-    var smoke: SmokeView = undefined;
-    smoke.reset(
-        model.outputView(2).contiguousSlice().?,
-        model.outputView(3).contiguousSlice().?,
-    );
+    const smoke_omega: f32 = 1.2;
+    const smoke_retention: f32 = 0.997;
+    advance(&model, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
 
     var running = true;
     var step_count: u64 = 1;
     var field: Field = .speed;
-    var view: View = .data;
+    var view: View = .smoke;
     var show_vectors = false;
     var previous_mouse = rl.getMousePosition();
     var was_dragging = false;
 
     while (!rl.windowShouldClose()) {
-        var reset_smoke = false;
         updateForces(&force_x, &force_y, &previous_mouse, &was_dragging);
         if (rl.isKeyPressed(.space)) running = !running;
         if (rl.isKeyPressed(.v)) field = if (field == .speed) .density else .speed;
-        if (rl.isKeyPressed(.p)) view = if (view == .data) .particles else .data;
+        if (rl.isKeyPressed(.p)) view = if (view == .smoke) .data else .smoke;
         if (rl.isKeyPressed(.a)) show_vectors = !show_vectors;
         if (rl.isKeyPressed(.left_bracket)) omega = std.math.clamp(omega - 0.05, 0.6, 1.7);
         if (rl.isKeyPressed(.right_bracket)) omega = std.math.clamp(omega + 0.05, 0.6, 1.7);
         if (rl.isKeyPressed(.r)) {
             seedVortices(&populations);
+            smoke_populations = @splat(0);
             force_x = @splat(0);
             force_y = @splat(0);
-            advance(&model, &populations, &force_x, &force_y, omega);
+            advance(&model, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
             step_count = 1;
-            reset_smoke = true;
         } else if (rl.isKeyPressed(.n)) {
-            advectSmoke(&smoke, &model);
-            advance(&model, &populations, &force_x, &force_y, omega);
+            advance(&model, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
             step_count += 1;
             running = false;
         } else if (running) {
-            advectSmoke(&smoke, &model);
-            advance(&model, &populations, &force_x, &force_y, omega);
+            advance(&model, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
             step_count += 1;
         }
 
-        const density = model.outputView(1).contiguousSlice().?;
-        const velocity_x = model.outputView(2).contiguousSlice().?;
-        const velocity_y = model.outputView(3).contiguousSlice().?;
-        if (reset_smoke) {
-            smoke.reset(velocity_x, velocity_y);
-        }
+        const smoke = model.outputView(2).contiguousSlice().?;
+        const density = model.outputView(3).contiguousSlice().?;
+        const velocity_x = model.outputView(4).contiguousSlice().?;
+        const velocity_y = model.outputView(5).contiguousSlice().?;
 
         rl.beginDrawing();
         defer rl.endDrawing();
         rl.clearBackground(rl.Color.init(10, 15, 23, 255));
         drawHeader(running, step_count, view, field, show_vectors, omega);
         switch (view) {
+            .smoke => drawSmoke(smoke),
             .data => {
                 drawField(field, density, velocity_x, velocity_y);
-                if (show_vectors) drawVectors(velocity_x, velocity_y);
             },
-            .particles => smoke.draw(cell_size, header_height),
         }
+        if (show_vectors) drawVectors(velocity_x, velocity_y);
     }
 }
 
-fn advectSmoke(smoke: *SmokeView, model: *fluid.FluidStep) void {
-    smoke.update(
-        model.outputView(2).contiguousSlice().?,
-        model.outputView(3).contiguousSlice().?,
-    );
-}
-
 fn advance(
-    model: *fluid.FluidStep,
+    model: *fluid.FluidSmokeStep,
     populations: *[population_count]f32,
+    smoke_populations: *[smoke_population_count]f32,
+    smoke_injection: *const [cell_count]f32,
     force_x: *const [cell_count]f32,
     force_y: *const [cell_count]f32,
     omega: f32,
+    smoke_omega: f32,
+    smoke_retention: f32,
 ) void {
     model.copyInput(.f, populations) catch unreachable;
+    model.copyInput(.smoke_g, smoke_populations) catch unreachable;
+    model.copyInput(.smoke_injection, smoke_injection) catch unreachable;
     model.copyInput(.force_x, force_x) catch unreachable;
     model.copyInput(.force_y, force_y) catch unreachable;
     model.copyInput(.omega, &.{omega}) catch unreachable;
+    model.copyInput(.smoke_omega, &.{smoke_omega}) catch unreachable;
+    model.copyInput(.smoke_retention, &.{smoke_retention}) catch unreachable;
     model.run();
     @memcpy(populations, model.outputView(0).contiguousSlice().?);
+    @memcpy(smoke_populations, model.outputView(1).contiguousSlice().?);
 }
 
 fn updateForces(
@@ -135,8 +134,8 @@ fn updateForces(
     if (dragging and was_dragging.* and inside) {
         const grid_dx = (mouse.x - previous_mouse.x) / cell_size;
         const grid_dy = (mouse.y - previous_mouse.y) / cell_size;
-        const impulse_x = std.math.clamp(grid_dx * 0.003, -0.012, 0.012);
-        const impulse_y = std.math.clamp(grid_dy * 0.003, -0.012, 0.012);
+        const impulse_x = std.math.clamp(grid_dx * 0.012, -0.05, 0.05);
+        const impulse_y = std.math.clamp(grid_dy * 0.012, -0.05, 0.05);
         applyLocalizedForce(force_x, force_y, mouse.x / cell_size, grid_y / cell_size, impulse_x, impulse_y);
     }
 
@@ -187,9 +186,21 @@ fn seedVortices(populations: *[population_count]f32) void {
 
             for (0..9) |direction| {
                 const dot = cx[direction] * ux + cy[direction] * uy;
-                populations[(y * fluid.W + x) * 9 + direction] = weights[direction] *
+                populations[(y * fluid.W + x) * 9 + direction] = fluid_weights[direction] *
                     (1.0 + 3.0 * dot + 4.5 * dot * dot - 1.5 * speed_sq);
             }
+        }
+    }
+}
+
+fn seedSmokeEmitter(injection: *[cell_count]f32) void {
+    const center_x: f32 = @as(f32, @floatFromInt(fluid.W)) * 0.3;
+    const center_y: f32 = @as(f32, @floatFromInt(fluid.H)) * 0.5 + 12.0;
+    for (0..fluid.H) |y| {
+        for (0..fluid.W) |x| {
+            const dx = @as(f32, @floatFromInt(x)) - center_x;
+            const dy = @as(f32, @floatFromInt(y)) - center_y;
+            injection[y * fluid.W + x] = 0.035 * @exp(-(dx * dx + dy * dy) / 18.0);
         }
     }
 }
@@ -197,19 +208,35 @@ fn seedVortices(populations: *[population_count]f32) void {
 fn drawHeader(running: bool, step_count: u64, view: View, field: Field, show_vectors: bool, omega: f32) void {
     rl.drawRectangle(0, 0, screen_width, header_height, rl.Color.init(22, 30, 42, 255));
     rl.drawText("D2Q9 lattice Boltzmann", 16, 8, 24, .ray_white);
-    rl.drawText("Space: pause  N: step  R: reset  P: data/particles", 16, 65, 16, .light_gray);
+    rl.drawText("Space: pause  N: step  R: reset  P: smoke/data", 16, 65, 16, .light_gray);
     rl.drawText("V: speed/density  A: vectors  Drag: stir  [ / ]: omega", 16, 88, 16, .light_gray);
 
     var status_buffer: [128]u8 = undefined;
     const status = std.fmt.bufPrintZ(&status_buffer, "{s}  step {d}  {s}  {s}  vectors {s}  omega {d:.2}", .{
         if (running) "running" else "paused",
         step_count,
-        if (view == .data) "data" else "particles",
+        if (view == .smoke) "smoke" else "data",
         if (field == .speed) "speed" else "density",
         if (show_vectors) "on" else "off",
         omega,
     }) catch unreachable;
     rl.drawText(status, 16, 39, 15, if (running) .lime else .gold);
+}
+
+fn drawSmoke(smoke: []const f32) void {
+    for (smoke, 0..) |concentration, index| {
+        const intensity = std.math.clamp(concentration / 0.8, 0.0, 1.0);
+        const shade: u8 = @intFromFloat(18.0 + 225.0 * @sqrt(intensity));
+        const x = index % fluid.W;
+        const y = index / fluid.W;
+        rl.drawRectangle(
+            @intCast(x * cell_size),
+            @intCast(header_height + y * cell_size),
+            cell_size,
+            cell_size,
+            rl.Color.init(shade, shade, @min(255, @as(u16, shade) + 8), 255),
+        );
+    }
 }
 
 fn drawField(field: Field, density: []const f32, ux: []const f32, uy: []const f32) void {

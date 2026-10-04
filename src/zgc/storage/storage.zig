@@ -1,5 +1,5 @@
 const std = @import("std");
-const Graph = @import("graph.zig");
+const Graph = @import("../core/graph.zig");
 
 pub const StorageRegion = struct {
     offset: usize,

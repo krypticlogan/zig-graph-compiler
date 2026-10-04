@@ -1,5 +1,5 @@
-const Elementwise = @import("../../operations/elementwise.zig");
-const Dtype = @import("../../dtype.zig").Dtype;
+const Elementwise = @import("../../../operations/elementwise.zig");
+const Dtype = @import("../../../storage/dtype.zig").Dtype;
 
 /// Scalar expression instructions shared by logical fusion regions.
 pub const Program = struct {

@@ -27,11 +27,11 @@ pub const Definition = zgc.DefinitionBuilder(Sources, .{
     .max_outputs = 1,
 });
 
-const Dense = zgc.nn.Dense(Sources);
+const Dense = zgc.ext.nn.Dense(Sources);
 
 // The layer description captures architecture independently of storage. The
 // parameter files use output-major weights, which Dense adapts for contraction.
-const Network = zgc.nn.Sequential(&[_]Dense{
+const Network = zgc.ext.nn.Sequential(&[_]Dense{
     .{
         .weights = .w1,
         .bias = .b1,
@@ -73,13 +73,13 @@ pub const definition = blk: {
 // Inputs remain caller-owned and replaceable, while immutable parameters are
 // embedded into the executable and available for compile-time source packing.
 pub const Model = definition.modelWith(&.{
-    .{ .source = .input, .binding = zgc.Source.bound },
-    .{ .source = .w1, .binding = zgc.Source.embed(params.w1) },
-    .{ .source = .b1, .binding = zgc.Source.embed(params.b1) },
-    .{ .source = .w2, .binding = zgc.Source.embed(params.w2) },
-    .{ .source = .b2, .binding = zgc.Source.embed(params.b2) },
-    .{ .source = .w3, .binding = zgc.Source.embed(params.w3) },
-    .{ .source = .b3, .binding = zgc.Source.embed(params.b3) },
+    .{ .source = .input, .binding = zgc.memory.Source.bound },
+    .{ .source = .w1, .binding = zgc.memory.Source.embed(params.w1) },
+    .{ .source = .b1, .binding = zgc.memory.Source.embed(params.b1) },
+    .{ .source = .w2, .binding = zgc.memory.Source.embed(params.w2) },
+    .{ .source = .b2, .binding = zgc.memory.Source.embed(params.b2) },
+    .{ .source = .w3, .binding = zgc.memory.Source.embed(params.w3) },
+    .{ .source = .b3, .binding = zgc.memory.Source.embed(params.b3) },
 });
 
 pub fn bindInput(model: *Model, input: *const [input_size]f32) void {

@@ -1,4 +1,4 @@
-const Dtype = @import("../dtype.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 
 /// Semantic operation supported by a fused elementwise program.
 pub const Operation = enum {

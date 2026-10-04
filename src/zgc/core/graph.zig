@@ -1,5 +1,5 @@
 const Tensor = @import("tensor.zig");
-const Dtype = @import("storage.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 const Shape_T = Tensor.Shape_T;
 pub fn Graph(comptime capacity: Capacity, comptime Operation: type) type {
     return struct {
@@ -13,11 +13,11 @@ pub fn Graph(comptime capacity: Capacity, comptime Operation: type) type {
             result: Tensor.Id,
         };
 
-        nodes: [capacity.max_nodes]?Node = .{null} ** capacity.max_nodes,
-        tensors: [capacity.max_tensors]?TensorInfo = .{null} ** capacity.max_tensors,
-        input_refs: [capacity.max_input_refs]?Tensor.Id = .{null} ** capacity.max_input_refs,
-        outputs: [capacity.max_outputs]?Tensor.Id = .{null} ** capacity.max_outputs,
-        sources: [capacity.max_sources]?Tensor.Source = .{null} ** capacity.max_sources,
+        nodes: [capacity.max_nodes]?Node = @splat(null),
+        tensors: [capacity.max_tensors]?TensorInfo = @splat(null),
+        input_refs: [capacity.max_input_refs]?Tensor.Id = @splat(null),
+        outputs: [capacity.max_outputs]?Tensor.Id = @splat(null),
+        sources: [capacity.max_sources]?Tensor.Source = @splat(null),
 
         node_ct: usize = 0,
         input_ref_ct: usize = 0,

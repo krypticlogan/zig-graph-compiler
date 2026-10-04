@@ -19,9 +19,9 @@ Enter to clear the canvas. The model parameters remain embedded read-only data.
 
 The six parameter binaries live in `model_params/`. The `model_params` module
 exposes them through `@embedFile`, and `src/digit-classifier.zig` assigns them with
-`zgc.Source.embed`. They are read-only data in the executable, not members of
+`zgc.memory.Source.embed`. They are read-only data in the executable, not members of
 the model's inline mutable memory. The 784-element input uses
-`zgc.Source.bound` and borrows caller storage at runtime.
+`zgc.memory.Source.bound` and borrows caller storage at runtime.
 
 The weight files are serialized as `[output, input]`. Three zero-copy transpose
 views adapt them to the graph matmul convention of `[input, output]`; the views
@@ -95,9 +95,9 @@ runner module to another model definition and for its exported symbol contract.
 4. Initialize the generated model, bind a runtime input, run, and retrieve an
    output view.
 
-The digit classifier composes its three dense stages with `zgc.nn.Dense` and
-`zgc.nn.Sequential`. Its output-major parameter files are selected through each
-layer's `.weight_layout = .output_input` setting.
+The digit classifier composes its three dense stages with `zgc.ext.nn.Dense`
+and `zgc.ext.nn.Sequential`. Its output-major parameter files are selected
+through each layer's `.weight_layout = .output_input` setting.
 
 ## Benchmarks
 

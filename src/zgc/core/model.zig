@@ -1,8 +1,8 @@
 const std = @import("std");
 const Graph = @import("graph.zig");
-const Storage = @import("storage.zig");
+const Storage = @import("../storage/storage.zig");
 const Tensor = @import("tensor.zig");
-const ScalarValue = @import("dtype.zig").ScalarValue;
+const ScalarValue = @import("../storage/dtype.zig").ScalarValue;
 
 fn EmbeddedStorage(comptime bytes: []const u8, comptime alignment: usize) type {
     const contents = bytes;
@@ -75,6 +75,7 @@ pub fn Model(
     comptime SourceKey: type,
     comptime capacities: Graph.Capacity,
     comptime raw: anytype,
+    comptime semantic_optimization: anytype,
     comptime SemanticValidated: type,
     comptime semantic_analysis: anytype,
     comptime executable_search: anytype,
@@ -93,12 +94,15 @@ pub fn Model(
         pub const internal_capacity = capacities;
         pub const raw_graph = raw;
         pub const semantic_graph = SemanticValidated.graph;
+        pub const semantic_optimization_result = semantic_optimization;
+        pub const semantic_provenance = semantic_optimization.provenance;
         pub const semantic_analysis_result = semantic_analysis;
         pub const reference_executable_candidate = executable_search.reference;
         pub const executable_candidate_frontier = executable_search.frontier;
         pub const executable_candidate_count = executable_search.generated_count;
         pub const fusion_candidate_count = executable_search.fusion_candidate_count;
         pub const layout_candidate_count = executable_search.layout_candidate_count;
+        pub const remap_candidate_count = executable_search.remap_candidate_count;
         pub const selected_executable_candidate = executable_search.selected();
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;
@@ -176,7 +180,7 @@ pub fn Model(
             comptime requireInput(source);
             const source_id = comptime sourceIndex(source_key);
             if (comptime SourcePlan.source_bindings[source_id] != .bound) {
-                @compileError("bindInput requires the source to be configured as zgc.Source.bound");
+                @compileError("bindInput requires the source to be configured as zgc.memory.Source.bound");
             }
             const bytes = std.mem.sliceAsBytes(values);
             const expected_bytes = comptime sourceByteCount(source_key);

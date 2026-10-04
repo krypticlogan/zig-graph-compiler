@@ -1,4 +1,4 @@
-const Dtype = @import("../dtype.zig").Dtype;
+const Dtype = @import("../storage/dtype.zig").Dtype;
 const accumulation = @import("accumulation.zig");
 const simd = @import("simd.zig");
 
