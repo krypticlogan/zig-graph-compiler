@@ -2,7 +2,7 @@ const Execution = @import("../../execution/execution.zig");
 const Executable = @import("../../execution/program.zig").Executable;
 const Graph = @import("../../core/graph.zig");
 const Semantic = @import("../../operations/semantic.zig");
-const Analysis = @import("../analysis.zig");
+const Analysis = @import("../analysis/root.zig");
 const ContractionPlanner = @import("contraction.zig");
 const Map = @import("map.zig");
 const Reduction = @import("reduction.zig");
@@ -18,6 +18,7 @@ pub fn Lowering(comptime capacity: Graph.Capacity) type {
 
         pub fn lower(
             comptime source_graph: SemanticGraph,
+            comptime topological_order: [capacity.max_nodes]usize,
             comptime fusion_regions: FusionRegions,
             comptime remap_regions: RemapRegions,
         ) Executable(capacity, Execution.Op) {
@@ -36,7 +37,7 @@ pub fn Lowering(comptime capacity: Graph.Capacity) type {
                 if (source_graph.sources[source_index]) |source| program.insertSource(source_index, source);
             }
 
-            inline for (0..source_graph.node_ct) |node_id| {
+            inline for (topological_order[0..source_graph.node_ct]) |node_id| {
                 if (remap_regions.node_region[node_id]) |region_id| {
                     const group = remap_regions.groups[region_id].?;
                     if (node_id != group.root_node) continue;

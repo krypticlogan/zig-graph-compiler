@@ -45,9 +45,14 @@ pub fn SemanticOptimization(comptime capacity: Graph.Capacity) type {
             const use_counts = countUses(raw);
             const is_output = outputSet(raw);
             const folded_concats = findFoldedConcats(raw, use_counts, is_output);
+            const tensor_order = topologicalTensorOrder(raw);
             var result: RewriteResult = .{ .graph = .init(), .provenance = .{} };
 
-            inline for (0..raw.tensor_ct) |old_tensor_id| {
+            // Prefer the original tensor order whenever it is dependency
+            // valid, but defer a tensor whose producer, inputs, or storage
+            // root have not been visited. Existing graph identities therefore
+            // remain stable without treating tensor IDs as an execution order.
+            inline for (tensor_order[0..raw.tensor_ct]) |old_tensor_id| {
                 const old_info = raw.tensors[old_tensor_id].?;
                 switch (old_info.origin) {
                     .source => |source_index| {
@@ -228,6 +233,40 @@ pub fn SemanticOptimization(comptime capacity: Graph.Capacity) type {
             if (old_storage == old_result) return new_result;
             return provenance.raw_to_optimized_tensor[old_storage] orelse
                 @compileError("tensor storage root was removed before its alias");
+        }
+
+        fn topologicalTensorOrder(comptime graph: SemanticGraph) [capacity.max_tensors]usize {
+            var order: [capacity.max_tensors]usize = @splat(0);
+            var emitted: [capacity.max_tensors]bool = @splat(false);
+            var count: usize = 0;
+            while (count < graph.tensor_ct) {
+                var ready: ?usize = null;
+                for (0..graph.tensor_ct) |tensor_id| {
+                    if (emitted[tensor_id]) continue;
+                    const info = graph.tensors[tensor_id].?;
+                    if (info.storage_tensor != tensor_id and !emitted[info.storage_tensor]) continue;
+                    const dependencies_ready = switch (info.origin) {
+                        .source, .literal => true,
+                        .node => |node_id| blk: {
+                            const node = graph.nodes[node_id].?;
+                            for (0..node.input_count) |input_index| {
+                                const input_id = graph.input_refs[node.input_start + input_index].?;
+                                if (!emitted[input_id]) break :blk false;
+                            }
+                            break :blk true;
+                        },
+                    };
+                    if (dependencies_ready) {
+                        ready = tensor_id;
+                        break;
+                    }
+                }
+                const tensor_id = ready orelse @compileError("semantic graph contains a tensor dependency cycle");
+                order[count] = tensor_id;
+                emitted[tensor_id] = true;
+                count += 1;
+            }
+            return order;
         }
 
         fn countUses(comptime graph: SemanticGraph) [capacity.max_tensors]usize {

@@ -30,7 +30,17 @@ test "definition counting and lowering preserve exact graph contracts" {
     try std.testing.expectEqual(@as(usize, 2), counts.max_rank);
     try std.testing.expectEqualSlices(usize, &.{ 3, 7 }, graph.tensors[2].?.shape.slice());
     try std.testing.expectEqual([2]isize{ 7, 1 }, graph.tensors[2].?.layout.strides);
-    try std.testing.expectEqualStrings("contracted_axis", @tagName(graph.nodes[0].?.op.compute.kernel.contraction.strategy));
+    const vector_width = std.simd.suggestVectorLength(f32) orelse 1;
+    switch (graph.nodes[0].?.op.compute) {
+        .kernel => |kernel| {
+            try std.testing.expect(vector_width <= 4);
+            try std.testing.expectEqualStrings("contracted_axis", @tagName(kernel.contraction.strategy));
+        },
+        .direct => |semantic| {
+            try std.testing.expect(vector_width > 4);
+            try std.testing.expectEqual(.matmul, semantic);
+        },
+    }
     try std.testing.expectEqual(@as(usize, 1), graph.nodes[0].?.output_count);
     try std.testing.expectEqual(@as(usize, 2), graph.output_refs[graph.nodes[0].?.output_start].?);
     try std.testing.expectEqual(@as(usize, 3), graph.outputs[0].?);

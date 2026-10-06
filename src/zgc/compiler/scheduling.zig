@@ -1,4 +1,5 @@
 const Graph = @import("../core/graph.zig");
+const Tensor = @import("../core/tensor.zig");
 const Semantic = @import("../operations/semantic.zig");
 const Execution = @import("../execution/execution.zig");
 const Executable = @import("../execution/program.zig").Executable;
@@ -37,8 +38,20 @@ pub fn Scheduling(comptime capacity: Graph.Capacity) type {
 
         fn semanticSchedule(comptime graph: SemanticGraph) ScheduleType {
             var schedule: ScheduleType = .{ .kind = .semantic };
-            for (0..graph.node_ct) |node_id| schedule.node_ids[node_id] = node_id;
-            schedule.node_count = graph.node_ct;
+            var emitted: [capacity.max_nodes]bool = @splat(false);
+            while (schedule.node_count < graph.node_ct) {
+                var ready: ?usize = null;
+                for (0..graph.node_ct) |node_id| {
+                    if (!emitted[node_id] and isReady(graph, emitted, node_id)) {
+                        ready = node_id;
+                        break;
+                    }
+                }
+                const node_id = ready orelse @compileError("semantic graph contains a dependency cycle");
+                schedule.node_ids[schedule.node_count] = node_id;
+                schedule.node_count += 1;
+                emitted[node_id] = true;
+            }
             return schedule;
         }
 
@@ -123,12 +136,14 @@ pub fn Scheduling(comptime capacity: Graph.Capacity) type {
         }
 
         fn computeCriticalWork(comptime graph: SemanticGraph, work: *[capacity.max_nodes]u128) void {
-            var node_id = graph.node_ct;
-            while (node_id > 0) {
-                node_id -= 1;
+            const order = semanticSchedule(graph);
+            var order_index = order.node_count;
+            while (order_index > 0) {
+                order_index -= 1;
+                const node_id = order.node_ids[order_index];
                 const node = graph.nodes[node_id].?;
                 var successor_work: u128 = 0;
-                for (node_id + 1..graph.node_ct) |consumer_id| {
+                for (0..graph.node_ct) |consumer_id| {
                     const consumer = graph.nodes[consumer_id].?;
                     for (0..consumer.input_count) |input_index| {
                         if (graph.input_refs[consumer.input_start + input_index].? == node.result) {
@@ -203,8 +218,20 @@ pub fn ExecutableScheduling(comptime capacity: Graph.Capacity) type {
 
         fn existingSchedule(comptime program: Program) ScheduleType {
             var schedule: ScheduleType = .{ .kind = .existing };
-            for (0..program.node_ct) |node_id| schedule.node_ids[node_id] = node_id;
-            schedule.node_count = program.node_ct;
+            var emitted: [capacity.max_nodes]bool = @splat(false);
+            while (schedule.node_count < program.node_ct) {
+                var ready: ?usize = null;
+                for (0..program.node_ct) |node_id| {
+                    if (!emitted[node_id] and isReady(program, emitted, node_id)) {
+                        ready = node_id;
+                        break;
+                    }
+                }
+                const node_id = ready orelse @compileError("executable contains a dependency cycle");
+                schedule.node_ids[schedule.node_count] = node_id;
+                schedule.node_count += 1;
+                emitted[node_id] = true;
+            }
             return schedule;
         }
 
@@ -280,14 +307,16 @@ pub fn ExecutableScheduling(comptime capacity: Graph.Capacity) type {
         }
 
         fn computeCriticalWork(program: Program, work: *[capacity.max_nodes]u128) void {
-            var node_id = program.node_ct;
-            while (node_id > 0) {
-                node_id -= 1;
+            const order = existingSchedule(program);
+            var order_index = order.node_count;
+            while (order_index > 0) {
+                order_index -= 1;
+                const node_id = order.node_ids[order_index];
                 const node = program.nodes[node_id].?;
                 var own: u128 = 0;
                 for (0..node.output_count) |output_index| own += program.tensors[program.output_refs[node.output_start + output_index].?].?.shape.elementCount();
                 var successor_work: u128 = 0;
-                for (node_id + 1..program.node_ct) |consumer_id| {
+                for (0..program.node_ct) |consumer_id| {
                     const consumer = program.nodes[consumer_id].?;
                     for (0..consumer.input_count) |input_index| {
                         for (0..node.output_count) |output_index| {
@@ -357,4 +386,64 @@ pub fn Reference(comptime capacity: Graph.Capacity) type {
             return program;
         }
     };
+}
+
+test "semantic schedules follow dependencies rather than node identifiers" {
+    const std = @import("std");
+    const capacity: Graph.Capacity = .{
+        .max_nodes = 2,
+        .max_input_refs = 2,
+        .max_tensors = 3,
+        .max_outputs = 1,
+        .max_sources = 1,
+        .max_rank = 1,
+    };
+    const SemanticGraph = Graph.Graph(capacity, Semantic.Op);
+    const shape = Tensor.Shape(1).init(&.{4});
+    const layout = Tensor.Layout(1).contiguous(shape);
+    const graph: SemanticGraph = comptime blk: {
+        var value: SemanticGraph = .init();
+        _ = value.insertTensor(.{
+            .dtype = .f32,
+            .shape = shape,
+            .layout = layout,
+            .storage_tensor = 0,
+            .origin = .{ .source = 0 },
+        });
+        _ = value.insertTensor(.{
+            .dtype = .f32,
+            .shape = shape,
+            .layout = layout,
+            .storage_tensor = 1,
+            .origin = .{ .node = 1 },
+        });
+        _ = value.insertTensor(.{
+            .dtype = .f32,
+            .shape = shape,
+            .layout = layout,
+            .storage_tensor = 2,
+            .origin = .{ .node = 0 },
+        });
+        value.insertRef(1);
+        value.insertNode(.{
+            .op = .{ .compute = .relu },
+            .input_start = 0,
+            .input_count = 1,
+            .result = 2,
+        });
+        value.insertRef(0);
+        value.insertNode(.{
+            .op = .{ .compute = .relu },
+            .input_start = 1,
+            .input_count = 1,
+            .result = 1,
+        });
+        value.insertOutput(2);
+        break :blk value;
+    };
+
+    const schedules = Scheduling(capacity).enumerate(graph);
+    inline for (schedules) |schedule| {
+        try std.testing.expectEqualSlices(usize, &.{ 1, 0 }, schedule.node_ids[0..schedule.node_count]);
+    }
 }

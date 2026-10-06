@@ -90,7 +90,8 @@ test "elementwise producer folds into its reduction" {
     const Model = ProducerReductionModel;
 
     try std.testing.expectEqual(@as(usize, 2), Model.fusion_candidate_count);
-    try std.testing.expectEqual(@as(usize, 15), Model.executable_candidate_count);
+    try std.testing.expectEqual(@as(usize, 2), Model.representation_candidate_count);
+    try std.testing.expectEqual(@as(usize, 9), Model.executable_candidate_count);
     try std.testing.expectEqual(.discovered, Model.selected_executable_candidate.fusion_regime.?);
     try std.testing.expectEqual(@as(usize, 2), Model.semantic_graph.node_ct);
     try std.testing.expectEqual(@as(usize, 1), Model.executable.node_ct);

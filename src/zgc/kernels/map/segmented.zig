@@ -18,7 +18,7 @@ pub fn executeExpression(
     executeWithProgram(program, plan, inputs, output);
 }
 
-fn executeWithProgram(
+inline fn executeWithProgram(
     comptime program: ?Program,
     comptime plan: Plan.MapPlan.SegmentedPlan,
     inputs: anytype,

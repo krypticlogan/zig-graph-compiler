@@ -11,7 +11,7 @@ const slice_loop = @import("slice_loop.zig");
 const special = @import("special.zig");
 
 /// Execute one semantic compute operation without a specialized kernel plan.
-pub fn execute(comptime op: Op.Compute, inputs: anytype, output: anytype) void {
+pub inline fn execute(comptime op: Op.Compute, inputs: anytype, output: anytype) void {
     if (comptime Pointwise.fromCompute(op)) |pointwise| {
         elementwise.execute(pointwise, inputs, output);
         return;

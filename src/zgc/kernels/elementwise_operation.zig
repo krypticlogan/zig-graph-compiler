@@ -3,7 +3,7 @@ const Operation = @import("../operations/elementwise.zig").Operation;
 
 /// Arithmetic semantics for one elementwise instruction. Traversal kernels
 /// supply indexing, broadcasting, scheduling, and stores.
-pub fn evaluate(
+pub inline fn evaluate(
     comptime output_dtype: Dtype,
     comptime vector_len: usize,
     comptime operation: Operation,
@@ -37,7 +37,7 @@ pub fn evaluate(
     };
 }
 
-pub fn evaluateScalar(
+pub inline fn evaluateScalar(
     comptime output_dtype: Dtype,
     comptime operation: Operation,
     params: anytype,

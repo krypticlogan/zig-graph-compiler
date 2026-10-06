@@ -156,7 +156,7 @@ fn executeVectorized(comptime plan: ReductionPlan, inputs: anytype, outputs: any
     }
 }
 
-fn evaluateScalar(
+inline fn evaluateScalar(
     comptime plan: ReductionPlan,
     inputs: anytype,
     coordinates: anytype,
@@ -175,7 +175,7 @@ fn evaluateScalar(
     return values;
 }
 
-fn evaluateVector(
+inline fn evaluateVector(
     comptime plan: ReductionPlan,
     inputs: anytype,
     coordinates: anytype,
@@ -206,7 +206,7 @@ fn evaluateVector(
     return values;
 }
 
-fn storeResults(
+inline fn storeResults(
     comptime plan: ReductionPlan,
     outputs: anytype,
     output_linear: usize,
@@ -230,7 +230,7 @@ fn storeResults(
     }
 }
 
-fn resolveScalar(
+inline fn resolveScalar(
     comptime dtype: Dtype,
     comptime rank: usize,
     comptime domain_shape: [rank]usize,
@@ -249,7 +249,7 @@ fn resolveScalar(
     };
 }
 
-fn resolveVector(
+inline fn resolveVector(
     comptime dtype: Dtype,
     comptime rank: usize,
     comptime domain_shape: [rank]usize,

@@ -5,7 +5,7 @@ const elementwise = @import("../elementwise_operation.zig");
 /// Evaluate one value from a compile-time expression program at logical domain
 /// coordinates. Access composition uses this without materializing the
 /// expression's original output tensor.
-pub fn evaluateAt(
+pub inline fn evaluateAt(
     comptime program: Program,
     comptime result: Program.ValueRef,
     inputs: anytype,
@@ -25,7 +25,7 @@ pub fn evaluateAt(
 
 /// Evaluate a vector of adjacent values along one logical domain axis. Input
 /// access is either contiguous on that axis or broadcast from one scalar.
-pub fn evaluateVectorAt(
+pub inline fn evaluateVectorAt(
     comptime program: Program,
     comptime result: Program.ValueRef,
     inputs: anytype,
@@ -68,7 +68,7 @@ pub fn evaluateVectorAt(
     );
 }
 
-pub fn coordinatesFromLinear(comptime shape: anytype, linear_index: usize) [shape.len]usize {
+pub inline fn coordinatesFromLinear(comptime shape: anytype, linear_index: usize) [shape.len]usize {
     var coordinates: [shape.len]usize = @splat(0);
     var remaining = linear_index;
     var axis = shape.len;
@@ -80,7 +80,7 @@ pub fn coordinatesFromLinear(comptime shape: anytype, linear_index: usize) [shap
     return coordinates;
 }
 
-fn resolve(
+inline fn resolve(
     comptime program: Program,
     comptime reference: Program.ValueRef,
     inputs: anytype,
@@ -104,7 +104,7 @@ fn Values(comptime program: Program) type {
     return std.meta.Tuple(&types);
 }
 
-fn resolveVector(
+inline fn resolveVector(
     comptime program: Program,
     comptime reference: Program.ValueRef,
     inputs: anytype,

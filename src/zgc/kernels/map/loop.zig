@@ -61,7 +61,7 @@ pub fn execute(
     }
 }
 
-fn evaluateScalar(
+inline fn evaluateScalar(
     comptime Scalar: type,
     comptime program: ?Program,
     comptime plan: Plan.MapPlan.LoopPlan,
@@ -75,7 +75,7 @@ fn evaluateScalar(
     return inputs[plan.value.input].storage[inputs[plan.value.input].elementOffset(coordinates)];
 }
 
-fn evaluateVector(
+inline fn evaluateVector(
     comptime Scalar: type,
     comptime program: ?Program,
     comptime plan: Plan.MapPlan.LoopPlan,
@@ -99,7 +99,7 @@ fn evaluateVector(
     return input.storage[offset..][0..plan.vector_width].*;
 }
 
-fn store(
+inline fn store(
     comptime loop_axis: usize,
     comptime iteration: Plan.MapPlan.LoopPlan.Iteration,
     comptime channel: usize,
@@ -127,7 +127,12 @@ fn store(
         }
     }
     destination[loop_axis] = if (outside) switch (iteration.boundary) {
-        .redirect => |redirect| redirect,
+        .redirect => |redirect| blk: {
+            inline for (0..destination.len) |axis| {
+                if (axis != loop_axis) destination[axis] = source_coordinates[axis];
+            }
+            break :blk redirect;
+        },
         .wrap => unreachable,
     } else channel;
     output.storage[output.elementOffset(destination)] = value;

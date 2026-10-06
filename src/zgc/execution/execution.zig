@@ -11,7 +11,7 @@ pub const ExecutableCompute = union(enum) {
     direct: Semantic.Op.Compute,
     kernel: KernelPlan,
 
-    pub fn execute(comptime compute: ExecutableCompute, inputs: anytype, outputs: anytype) void {
+    pub inline fn execute(comptime compute: ExecutableCompute, inputs: anytype, outputs: anytype) void {
         switch (compute) {
             .direct => |semantic| {
                 if (outputs.len != 1) @compileError("direct compute requires exactly one output");

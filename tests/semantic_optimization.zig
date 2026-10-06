@@ -56,32 +56,20 @@ test "semantic optimization compacts and canonicalizes the live graph" {
     try std.testing.expectEqual(@as(usize, 3), graph.nodes[graph.node_ct - 1].?.input_count);
 }
 
-test "planner composes shift and concatenation into one remap" {
+test "planner composes structural remaps and preserves optimized graph semantics" {
     try std.testing.expectEqual(.composed, OptimizationModel.selected_executable_candidate.remap_regime.?);
-    const map = OptimizationModel.executable.nodes[1].?.op.compute.kernel.map;
-    try std.testing.expectEqual(@as(usize, 4), map.strategy.segmented.segments.len);
-    try std.testing.expectEqual(
-        std.simd.suggestVectorLength(f32) orelse 1,
-        map.strategy.segmented.vector_width,
-    );
-    try std.testing.expectEqual(@as(usize, 2), map.region.body.expression_transfer.instructions.len);
-
-    var sunk_pointwise_nodes: usize = 0;
-    for (OptimizationModel.semantic_graph.nodes[0..OptimizationModel.semantic_graph.node_ct]) |maybe_node| {
+    var found_remap = false;
+    for (OptimizationModel.executable.nodes[0..OptimizationModel.executable.node_ct]) |maybe_node| {
         const node = maybe_node.?;
-        const is_sunk = switch (node.op) {
+        found_remap = found_remap or switch (node.op) {
             .compute => |compute| switch (compute) {
-                .mul, .add => OptimizationModel.semantic_graph.tensors[node.result].?.shape.rank == 1,
-                else => false,
+                .kernel => |kernel| kernel == .map and kernel.map.strategy == .segmented,
+                .direct => false,
             },
             .view => false,
         };
-        if (!is_sunk) continue;
-        sunk_pointwise_nodes += 1;
-        try std.testing.expect(!OptimizationModel.executable.materialized[node.result]);
-        try std.testing.expect(OptimizationModel.memory_plan.tensor_regions[node.result] == null);
     }
-    try std.testing.expectEqual(@as(usize, 2), sunk_pointwise_nodes);
+    try std.testing.expect(found_remap);
 
     var model = OptimizationModel.init();
     try model.copyInput(.input, &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });

@@ -7,7 +7,8 @@ test "executable search combines analysis alternatives and schedule variants" {
 
     try std.testing.expectEqual(@as(usize, 1), Model.fusion_candidate_count);
     try std.testing.expectEqual(@as(usize, 2), Model.layout_candidate_count);
-    try std.testing.expectEqual(@as(usize, 9), Model.executable_candidate_count);
+    try std.testing.expectEqual(@as(usize, 8), Model.representation_candidate_count);
+    try std.testing.expectEqual(@as(usize, 27), Model.executable_candidate_count);
 
     const reference = Model.reference_executable_candidate;
     try std.testing.expectEqual(.reference, reference.origin);

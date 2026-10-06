@@ -9,7 +9,7 @@ const loop = @import("loop.zig");
 /// Execute a compile-time elementwise program in one output traversal. The
 /// instruction sequence and every value reference are unrolled at compile
 /// time; no operation dispatch occurs at runtime.
-pub fn execute(
+pub inline fn execute(
     comptime plan: MapPlan,
     inputs: anytype,
     outputs: anytype,

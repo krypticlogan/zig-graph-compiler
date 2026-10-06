@@ -100,6 +100,7 @@ pub fn Model(
         pub const reference_executable_candidate = executable_search.reference;
         pub const executable_candidate_frontier = executable_search.frontier;
         pub const executable_candidate_count = executable_search.generated_count;
+        pub const representation_candidate_count = executable_search.representation_candidate_count;
         pub const fusion_candidate_count = executable_search.fusion_candidate_count;
         pub const layout_candidate_count = executable_search.layout_candidate_count;
         pub const remap_candidate_count = executable_search.remap_candidate_count;
@@ -118,7 +119,7 @@ pub fn Model(
         }
 
         pub fn run(model: *Self) void {
-            @setEvalBranchQuota(1_000 + graph.node_ct * 64);
+            @setEvalBranchQuota(10_000 + graph.node_ct * 2_048);
             inline for (0..graph.node_ct) |node_id| {
                 model.executeNode(node_id);
             }
@@ -204,7 +205,7 @@ pub fn Model(
             return sourceInfo(source_key).layout;
         }
 
-        fn executeNode(model: *Self, comptime node_id: usize) void {
+        inline fn executeNode(model: *Self, comptime node_id: usize) void {
             const node = graph.nodes[node_id].?;
             const compute = switch (node.op) {
                 .compute => |op| op,

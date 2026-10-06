@@ -1,5 +1,5 @@
 const Construction = @import("construction.zig");
-const Analysis = @import("analysis.zig");
+const Analysis = @import("analysis/root.zig");
 const Search = @import("search.zig");
 const SemanticOptimization = @import("semantic_optimization.zig");
 const validation = @import("validation.zig");
@@ -13,7 +13,7 @@ pub fn model(
     comptime source_configuration: anytype,
 ) type {
     const compile_work = 10_000 + definition.node_count *
-        (definition.tensor_count + definition.input_ref_count + Definition.max_rank + 16) * 64;
+        (definition.tensor_count + definition.input_ref_count + Definition.max_rank + 16) * 1024;
     @setEvalBranchQuota(compile_work);
     const capacity = Construction.count(Definition, definition);
     const raw_graph = Construction.GraphConstruction(Definition, capacity).build(definition);
