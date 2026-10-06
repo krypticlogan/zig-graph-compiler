@@ -108,22 +108,28 @@ retaining bidirectional provenance to the raw graph. Source enum indices remain
 stable because they are part of the public binding contract.
 
 Semantic analysis records tensor use counts, graph outputs, tensor-to-consumer
-edges, and a deterministic topological order and rank for every node. Fusion
-and remap discovery traverse those dependency facts rather than treating node
-identifiers as dependency adjacency. Fusion analysis emits an unfused regime
-plus discovered pointwise map, producer-to-reduction, and compatible
-sibling-reduction regions when available. Layout analysis emits canonical and
-propagated layout regimes without choosing between them. Remap analysis emits
-a direct regime plus an optional composed regime for compatible shift and
-concatenation regions.
+edges, and a deterministic topological order and rank for every node. Analysis
+is organized under `compiler/analysis/`: `semantic.zig` owns dependency facts,
+while `fusion.zig`, `layout.zig`, and `remap.zig` discover their respective
+alternatives. Fusion and remap discovery traverse dependency facts rather than
+treating node identifiers as dependency adjacency. Fusion analysis emits an
+unfused regime plus discovered pointwise map, producer-to-reduction, and
+compatible sibling-reduction regions when available. Layout analysis emits
+canonical and propagated layout regions without choosing between them. Remap
+analysis emits a direct regime plus optional composed regions for compatible
+shift and concatenation operations.
 
-Executable search owns the decision boundary. It combines fusion, layout, and
-remap candidates, asks the corresponding planner to realize each region as a
-concrete data-only kernel plan, generates schedule variants, and compares
-completed programs. Map, reduction, and contraction planning implementations
-live under `compiler/planning/`; search owns their combination and selection.
-There is no canonical fused/layout/kernel executable before this search. A
-rank-2 matmul retains the logical
+Executable search owns the decision boundary. It incrementally composes
+non-conflicting fusion, layout, and remap regions into partial whole-program
+representations. Node-claim and tensor-layout checks reject incompatible local
+choices before lowering. An empty planned baseline and a maximally compatible
+anchor are retained, while bounded local pruning favors representations that
+cover more nodes and tensors with fewer region boundaries. Each representation
+is lowered through the corresponding data-only kernel planners and expanded
+into legal schedule variants. Map, reduction, and contraction planning
+implementations live under `compiler/planning/`; search owns their composition
+and selection. There is no canonical fused/layout/kernel executable before
+this search. A rank-2 matmul retains the logical
 contract `[M, K] * [K, N]` while eligible parameter and constant right-hand
 sides use physical strides `[1, K]`. Batch-oriented layouts propagate through
 compatible operations in the propagated regime.
@@ -137,11 +143,14 @@ memory planning before costing.
 A `PlanCandidate` associates an `Executable` and `Schedule` with its origin and
 a structured cost containing estimated runtime work, ordinary read/write
 traffic, peak and persistent memory, scratch, code size, and conversion cost.
-The bounded search retains at most 16 candidates on a Pareto frontier and
-applies deterministic tie-breaking. Equal-cost physical choices favor analyzed
-fusion, propagated layouts, and composed remaps. The selected candidate becomes
-the model's active executable and receives the final model lifetime and storage
-plan.
+Representation composition retains at most eight locally useful partial
+representations before lowering. The executable search then retains at most 16
+completed candidates on a Pareto frontier and applies deterministic
+tie-breaking. When the frontier is full, a stronger incomparable candidate may
+replace the weakest retained candidate. Equal-cost physical choices favor
+analyzed fusion, propagated layouts, and composed remaps. The selected
+candidate becomes the model's active executable and receives the final model
+lifetime and storage plan.
 
 Semantic compute nodes use the operation representation in `operations/`.
 Executable compute nodes retain unchanged operations as `direct` semantic
@@ -203,7 +212,7 @@ The model API provides:
 - `copySource(key, values)` to pack logical row-major values into any model-owned source;
 - `bindInput(key, values)` to borrow input already stored in the compiled physical layout;
 - `sourceLayout(key)` to query that source layout;
-- `run()` to execute compute nodes in graph order;
+- `run()` to execute the selected statically scheduled program;
 - `outputView(index)` to retrieve a typed read-only view.
 
 `zgc.Inspect` consumes the model's compile-time graph and memory-plan metadata
@@ -238,6 +247,16 @@ layouts, while kernels traverse contiguous axes in target-native SIMD chunks
 with scalar tails. Runtime view state contains storage and any cursor offset
 introduced by runtime-selected subviews; fixed tensor geometry is carried by
 the type.
+
+The generated model is a graph-specific function, not a runtime graph
+interpreter. Node selection and `ExecutableCompute` plan dispatch are explicit
+inline boundaries so compile-time tags disappear before code generation.
+Load, expression, address-resolution, and store helpers used inside an element
+loop are also inline where crossing the boundary would hide constants or block
+loop optimization. `Model.run`, tensor-view construction, and substantial
+kernel bodies remain ordinary function boundaries; unselected implementations
+are never instantiated, and selected kernels may remain standalone functions
+when the boundary preserves all specialization information.
 
 Executable lowering records a concrete matmul traversal strategy in a data-only
 contraction plan. Generated models dispatch directly to that strategy and do not

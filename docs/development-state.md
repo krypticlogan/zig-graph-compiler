@@ -8,8 +8,8 @@ on Zig 0.16.0. The API should still be expected to change.
 
 1. Define first-class composite operations from primitives for LayerNorm,
    activation functions, and domain extensions.
-2. Generalize executable search so compatible composite alternatives can be
-   combined and explored together.
+2. Refine executable cost estimates and local pruning as additional kernel and
+   representation alternatives are introduced.
 3. Add dtype conversion and settle the tensor-index dtype.
 4. Build argmin/argmax and runtime-indexed gather operations.
 5. Generalize matmul to broadcastable batch dimensions with compile-time
@@ -34,13 +34,18 @@ on Zig 0.16.0. The API should still be expected to change.
 - Semantic optimization compacts and renumbers the live graph while retaining
   raw-to-optimized provenance. It eliminates dead nodes, normalizes structural
   chains and concatenations, and folds scalar expressions and safe identities.
-- Semantic validation and analysis feed fusion, layout, and remap analyses.
-  Those analyses emit candidate regions and regimes rather than rewriting one
-  canonical executable.
-- Executable search combines those alternatives, realizes kernel plans,
-  generates semantic, memory-pressure, and critical-path schedules, and keeps
-  the generic reference candidate. Exact lifetime and memory planning precede
-  structured costing and Pareto pruning.
+- Semantic validation and dependency analysis feed separate fusion, layout,
+  and remap analyses under `compiler/analysis/`. Those analyses emit candidate
+  regions rather than rewriting one canonical executable.
+- Executable search incrementally combines non-conflicting regions, rejects
+  node and layout ownership collisions locally, and retains bounded partial
+  representations before lowering. It realizes kernel plans, generates
+  semantic, memory-pressure, and critical-path schedules, and keeps the generic
+  reference candidate. Exact lifetime and memory planning precede structured
+  costing and Pareto pruning.
+- Generated execution explicitly inlines compile-time node/plan dispatch and
+  hot per-element evaluation boundaries. Model entry points, view construction,
+  and substantial kernels are not force-inlined solely for specialization.
 - Executable programs use multi-output invocation records. Compatible sibling
   reductions share one invocation and write independent results.
 - Compatible shift and concatenation regions lower to optional segmented map
@@ -127,8 +132,9 @@ on Zig 0.16.0. The API should still be expected to change.
 - Layout selection is limited to packed matmul right-hand parameters, the
   matmul batch heuristic, and compatible result propagation. Fusion forms
   single-consumer pointwise maps, producer-to-reduction regions, and compatible
-  sibling reductions. Search compares unfused/discovered fusion,
-  canonical/propagated layout, and direct/composed remap regimes. Scalar
+  sibling reductions. Search composes compatible regions into canonical,
+  partially optimized, and maximally compatible representations before
+  scheduling and costing them. Scalar
   folding and conservative identities are implemented; general
   common-subexpression elimination, explicit layout-conversion insertion, and
   contraction implementation enumeration are not. Remap composition currently

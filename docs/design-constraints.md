@@ -18,8 +18,9 @@ and execution.
   analysis. Semantic analysis derives use, output, consumer-edge, and
   topological-order facts. Fusion, layout, and remap analysis only advertise
   legal alternatives; executable search owns selection and lowering.
-- Executable search retains an unfused generic reference candidate and a
-  bounded Pareto frontier of scheduled executable alternatives.
+- Executable search composes compatible analysis regions with early ownership
+  checks, retains an unfused generic reference candidate, and keeps a bounded
+  Pareto frontier of scheduled executable alternatives.
 - Raw and semantic graphs, the active executable, the reference candidate,
   and executable-candidate selection metadata remain available for inspection. The
   selected candidate supplies the executable used for model generation.
@@ -105,8 +106,10 @@ in the model's mutable memory plan.
 - Comparisons produce boolean tensors. Logical operations and selection
   conditions require boolean tensors; numeric values have no implicit
   truthiness conversion.
-- `run()` executes the fixed operation list sequentially. Runtime input values
-  may change between runs without rebuilding the model type.
+- `run()` executes the selected fixed schedule sequentially. Compile-time node
+  and plan dispatch are inlined into this graph-specific executable; substantial
+  kernels remain valid function boundaries. Runtime input values may change
+  between runs without rebuilding the model type.
 
 ## Memory
 
