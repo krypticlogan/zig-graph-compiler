@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const Workload = @import("benchmark_case");
 
 const run_count = build_options.runs;
 
@@ -14,119 +15,27 @@ comptime {
     }
 }
 
-pub fn main(init: std.process.Init) void {
-    if (comptime std.mem.eql(u8, build_options.op, "all")) {
-        runSuite(all_op_benchmarks, init);
-        runSuite(model_benchmarks, init);
-        return;
-    }
-    if (comptime std.mem.eql(u8, build_options.op, "ops")) {
-        runSuite(all_op_benchmarks, init);
-        return;
-    }
-    if (comptime std.mem.eql(u8, build_options.op, "models")) {
-        runSuite(model_benchmarks, init);
-        return;
-    }
-    if (comptime std.mem.eql(u8, build_options.op, "model")) {
-        runBenchmark(
-            @import("models/dense.zig").select(
-                build_options.model,
-                build_options.batch,
-            ),
-            init,
-        );
-        return;
-    }
-    runBenchmark(selectedBenchmark(), init);
+pub fn main(init: std.process.Init) !void {
+    const zgc_ns = try runBenchmark(Workload.ZgcBenchmark, init);
+    const direct_ns = try runBenchmark(Workload.DirectBenchmark, init);
+    std.debug.print(
+        \\Comparison
+        \\  average latency  ZGC {d:.3} ns | direct {d:.3} ns
+        \\  direct / ZGC    {d:.3}x (below 1.0 means direct is faster)
+        \\
+    ,
+        .{ zgc_ns, direct_ns, direct_ns / zgc_ns },
+    );
 }
 
-fn runSuite(comptime benchmarks: anytype, init: std.process.Init) void {
-    inline for (benchmarks) |Benchmark| runBenchmark(Benchmark, init);
-}
-
-fn selectedBenchmark() type {
-    const matmul = @import("ops/matmul.zig");
-    const elementwise = @import("ops/elementwise.zig");
-    const reduction = @import("ops/reduction.zig");
-    const models = @import("models/dense.zig");
-
-    if (std.mem.eql(u8, build_options.op, "relu")) return @import("ops/relu.zig").Benchmark;
-    if (std.mem.eql(u8, build_options.op, "relu-16")) return @import("ops/relu.zig").Small16;
-    if (std.mem.eql(u8, build_options.op, "relu-64")) return @import("ops/relu.zig").Medium64;
-    if (std.mem.eql(u8, build_options.op, "relu-256")) return @import("ops/relu.zig").Large256;
-    if (std.mem.eql(u8, build_options.op, "add")) return elementwise.AddContiguous;
-    if (std.mem.eql(u8, build_options.op, "add-strided")) return elementwise.AddStrided;
-    if (std.mem.eql(u8, build_options.op, "add-broadcast")) return elementwise.AddBroadcast;
-    if (std.mem.eql(u8, build_options.op, "exp")) return elementwise.ExpContiguous;
-    if (std.mem.eql(u8, build_options.op, "sum")) return reduction.SumContiguous;
-    if (std.mem.eql(u8, build_options.op, "sum-strided")) return reduction.SumStrided;
-    if (std.mem.eql(u8, build_options.op, "softmax")) return reduction.SoftmaxContiguous;
-    if (std.mem.eql(u8, build_options.op, "softmax-strided")) return reduction.SoftmaxStrided;
-    if (std.mem.eql(u8, build_options.op, "softmax-8")) return reduction.Softmax8;
-    if (std.mem.eql(u8, build_options.op, "softmax-10")) return reduction.Softmax10;
-    if (std.mem.eql(u8, build_options.op, "matmul-32")) return matmul.Square32;
-    if (std.mem.eql(u8, build_options.op, "matmul-64")) return matmul.Square64;
-    if (std.mem.eql(u8, build_options.op, "matmul-128")) return matmul.Square128;
-    if (std.mem.eql(u8, build_options.op, "matmul-rect")) return matmul.Rectangular;
-    if (std.mem.eql(u8, build_options.op, "matmul-lhs-strided")) return matmul.LhsStrided;
-    if (std.mem.eql(u8, build_options.op, "matmul-rhs-strided")) return matmul.RhsStrided;
-    if (std.mem.eql(u8, build_options.op, "matmul-output-strided")) return matmul.OutputStrided;
-    if (std.mem.eql(u8, build_options.op, "matmul-batch")) return matmul.BatchContiguous;
-    if (std.mem.eql(u8, build_options.op, "matmul-reference-16x8x24")) return matmul.Reference16x8x24;
-    if (std.mem.eql(u8, build_options.op, "matmul-reference-16x32x64")) return matmul.Reference16x32x64;
-    if (std.mem.eql(u8, build_options.op, "model-small-b1")) return models.SmallBatch1;
-    if (std.mem.eql(u8, build_options.op, "model-medium-b1")) return models.MediumBatch1;
-    if (std.mem.eql(u8, build_options.op, "model-large-b1")) return models.LargeBatch1;
-    if (std.mem.eql(u8, build_options.op, "model-small-b32")) return models.SmallBatch32;
-    if (std.mem.eql(u8, build_options.op, "model-medium-b32")) return models.MediumBatch32;
-    if (std.mem.eql(u8, build_options.op, "model-large-b32")) return models.LargeBatch32;
-    @compileError("unknown benchmark selector: " ++ build_options.op);
-}
-
-const all_op_benchmarks = .{
-    @import("ops/relu.zig").Benchmark,
-    @import("ops/relu.zig").Small16,
-    @import("ops/relu.zig").Medium64,
-    @import("ops/relu.zig").Large256,
-    @import("ops/elementwise.zig").AddContiguous,
-    @import("ops/elementwise.zig").AddStrided,
-    @import("ops/elementwise.zig").AddBroadcast,
-    @import("ops/elementwise.zig").ExpContiguous,
-    @import("ops/reduction.zig").SumContiguous,
-    @import("ops/reduction.zig").SumStrided,
-    @import("ops/reduction.zig").SoftmaxContiguous,
-    @import("ops/reduction.zig").SoftmaxStrided,
-    @import("ops/reduction.zig").Softmax8,
-    @import("ops/reduction.zig").Softmax10,
-    @import("ops/matmul.zig").Square32,
-    @import("ops/matmul.zig").Square64,
-    @import("ops/matmul.zig").Square128,
-    @import("ops/matmul.zig").Rectangular,
-    @import("ops/matmul.zig").LhsStrided,
-    @import("ops/matmul.zig").RhsStrided,
-    @import("ops/matmul.zig").OutputStrided,
-    @import("ops/matmul.zig").BatchContiguous,
-    @import("ops/matmul.zig").Reference16x8x24,
-    @import("ops/matmul.zig").Reference16x32x64,
-};
-
-const model_benchmarks = .{
-    @import("models/dense.zig").SmallBatch1,
-    @import("models/dense.zig").MediumBatch1,
-    @import("models/dense.zig").LargeBatch1,
-    @import("models/dense.zig").SmallBatch32,
-    @import("models/dense.zig").MediumBatch32,
-    @import("models/dense.zig").LargeBatch32,
-};
-
-fn runBenchmark(comptime Benchmark: type, init: std.process.Init) void {
+fn runBenchmark(comptime Selected: type, init: std.process.Init) !f64 {
     const clock = std.Io.Clock.awake;
-    var selected = Benchmark.init();
-    if (comptime @hasDecl(Benchmark, "prepare")) selected.prepare();
+    var selected = Selected.init();
+    if (comptime @hasDecl(Selected, "prepare")) try selected.prepare();
+    if (comptime @hasDecl(Selected, "validate")) try selected.validate();
 
-    const warmup = warmUp(Benchmark, &selected, clock, init);
-    const iterations = calibrateIterations(Benchmark, &selected, clock, init);
+    const warmup = warmUp(Selected, &selected, clock, init);
+    const iterations = calibrateIterations(Selected, &selected, clock, init);
 
     var samples_ns: [run_count]f64 = undefined;
     var timed_elapsed_ns: f64 = 0;
@@ -167,8 +76,8 @@ fn runBenchmark(comptime Benchmark: type, init: std.process.Init) void {
     const percentile_95_ns = sorted_samples[percentile_95_index];
 
     const invocations_per_second = @as(f64, std.time.ns_per_s) / average_ns;
-    const work_items_per_second = invocations_per_second * Benchmark.work_items_per_invocation;
-    const bytes_per_second = invocations_per_second * Benchmark.bytes_per_invocation;
+    const work_items_per_second = invocations_per_second * Selected.work_items_per_invocation;
+    const bytes_per_second = invocations_per_second * Selected.bytes_per_invocation;
     const coefficient_of_variation = standard_deviation_ns / average_ns * 100;
 
     std.debug.print(
@@ -181,7 +90,7 @@ fn runBenchmark(comptime Benchmark: type, init: std.process.Init) void {
         \\  throughput     {d:.3} invocations/s | {d:.3} {s}/s | {d:.3} GiB/s
         \\
     , .{
-        Benchmark.name,
+        Selected.name,
         @tagName(builtin.mode),
         warmup.iterations,
         @as(f64, @floatFromInt(warmup.elapsed_ns)) / std.time.ns_per_s,
@@ -198,29 +107,48 @@ fn runBenchmark(comptime Benchmark: type, init: std.process.Init) void {
         coefficient_of_variation,
         invocations_per_second,
         work_items_per_second,
-        Benchmark.work_unit,
+        Selected.work_unit,
         bytes_per_second / (1024 * 1024 * 1024),
     });
 
-    if (comptime @hasDecl(Benchmark, "latency_divisor")) {
-        const divisor = Benchmark.latency_divisor;
+    if (comptime @hasDecl(Selected, "latency_divisor")) {
+        const divisor = Selected.latency_divisor;
         std.debug.print(
             "  normalized     min {d:>10.3} | avg {d:>10.3} | max {d:>10.3} ns/{s}\n",
             .{
                 minimum_ns / divisor,
                 average_ns / divisor,
                 maximum_ns / divisor,
-                Benchmark.latency_unit,
+                Selected.latency_unit,
             },
         );
     }
-    if (comptime @hasDecl(Benchmark, "parameter_count")) {
+    if (comptime @hasDecl(Selected, "parameter_count")) {
         std.debug.print(
             "  model          {d} parameters | batch {d}\n",
-            .{ Benchmark.parameter_count, Benchmark.batch },
+            .{ Selected.parameter_count, Selected.batch },
+        );
+    }
+    if (comptime @hasDecl(Selected, "CompiledModel")) {
+        const choice = Selected.CompiledModel.selected_executable_candidate;
+        std.debug.print(
+            "  executable     {s} | schedule {s} | fusion {s} | layout {s} | remap {s} | {d} nodes\n",
+            .{
+                @tagName(choice.origin),
+                @tagName(choice.schedule),
+                regimeName(choice.fusion_regime),
+                regimeName(choice.layout_regime),
+                regimeName(choice.remap_regime),
+                Selected.CompiledModel.executable.node_ct,
+            },
         );
     }
     std.debug.print("\n", .{});
+    return average_ns;
+}
+
+fn regimeName(comptime regime: anytype) []const u8 {
+    return if (regime) |value| @tagName(value) else "none";
 }
 
 fn calibrateIterations(

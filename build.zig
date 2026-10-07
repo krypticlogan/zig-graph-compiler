@@ -77,9 +77,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&runner_test_exe.step);
 
     // benchmarks
-    const benchmark_op = b.option([]const u8, "op", "Operation, model, or benchmark tier to run") orelse "all";
-    const benchmark_model = b.option([]const u8, "model", "Dense model size used by -Dop=model") orelse "small";
-    const benchmark_batch = b.option(usize, "batch", "Compile-time batch size used by -Dop=model") orelse 1;
+    const benchmark_name = b.option([]const u8, "benchmark", "Specialized graph benchmark to run") orelse "dense";
     const benchmark_iterations = b.option(usize, "iterations", "Benchmark invocations per timed sample (0 calibrates to sample_ms)") orelse 0;
     const benchmark_runs = b.option(usize, "runs", "Number of timed samples") orelse 30;
     const benchmark_warmup = b.option(usize, "warmup_iterations", "Untimed warmup invocations (0 warms for warmup_ms)") orelse 0;
@@ -87,14 +85,32 @@ pub fn build(b: *std.Build) void {
     const benchmark_warmup_ms = b.option(usize, "warmup_ms", "Duration of the automatic untimed warmup") orelse 2_000;
 
     const benchmark_options = b.addOptions();
-    benchmark_options.addOption([]const u8, "op", benchmark_op);
-    benchmark_options.addOption([]const u8, "model", benchmark_model);
-    benchmark_options.addOption(usize, "batch", benchmark_batch);
     benchmark_options.addOption(usize, "iterations", benchmark_iterations);
     benchmark_options.addOption(usize, "runs", benchmark_runs);
     benchmark_options.addOption(usize, "warmup_iterations", benchmark_warmup);
     benchmark_options.addOption(usize, "sample_ms", benchmark_sample_ms);
     benchmark_options.addOption(usize, "warmup_ms", benchmark_warmup_ms);
+
+    const benchmark_source = if (std.mem.eql(u8, benchmark_name, "contraction"))
+        "benchmarks/workloads/contraction.zig"
+    else if (std.mem.eql(u8, benchmark_name, "reduction"))
+        "benchmarks/workloads/reduction.zig"
+    else if (std.mem.eql(u8, benchmark_name, "fusion"))
+        "benchmarks/workloads/fusion.zig"
+    else if (std.mem.eql(u8, benchmark_name, "dense"))
+        "benchmarks/workloads/dense.zig"
+    else if (std.mem.eql(u8, benchmark_name, "lbm"))
+        "benchmarks/workloads/lbm.zig"
+    else if (std.mem.eql(u8, benchmark_name, "conway"))
+        "benchmarks/workloads/conway.zig"
+    else
+        @panic("unknown benchmark; expected contraction, reduction, fusion, dense, lbm, or conway");
+    const benchmark_case = b.createModule(.{
+        .root_source_file = b.path(benchmark_source),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
+    });
 
     const benchmark_exe = b.addExecutable(.{
         .name = "zgc-benchmark",
@@ -105,10 +121,11 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "zgc", .module = zgc_mod },
                 .{ .name = "build_options", .module = benchmark_options.createModule() },
+                .{ .name = "benchmark_case", .module = benchmark_case },
             },
         }),
     });
     const run_benchmark = b.addRunArtifact(benchmark_exe);
-    const benchmark_step = b.step("benchmark", "Run the benchmark selected by -Dop");
+    const benchmark_step = b.step("benchmark", "Run the graph selected by -Dbenchmark");
     benchmark_step.dependOn(&run_benchmark.step);
 }

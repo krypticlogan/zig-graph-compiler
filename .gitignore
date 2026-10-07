@@ -12,11 +12,8 @@ inspect-out
 playground
 
 # Local fluid solver performance comparisons
-/examples/fluid-dynamics/benchmark
-/examples/fluid-dynamics/src/benchmark.zig
 /examples/fluid-dynamics/src/lbm-benchmark.zig
 /examples/fluid-dynamics/src/lbm-fluid-benchmark.zig
-/examples/fluid-dynamics/src/lbm-fluid-only.zig
 /examples/fluid-dynamics/src/lbm-direct.zig
 /examples/fluid-dynamics/src/lbm-compare.zig
 /examples/fluid-dynamics/src/lbm-model-legacy.zig
