@@ -5,6 +5,7 @@ const op_module = @import("../operations/semantic.zig");
 const Op = op_module.Op;
 const SourceStorage = @import("../storage/source.zig");
 const Tensor = @import("../core/tensor.zig");
+const Expr = @import("expressive.zig");
 const EmptySourceKey = enum(usize) {};
 
 /// Axes omitted with `null` reduce the entire tensor. Reduced dimensions are
@@ -50,6 +51,7 @@ pub const WindowOptions = struct {
     dilations: ?[]const usize = null,
 };
 
+/// Tensor shape description for graph construction. The shape is immutable.
 pub const BuildShape = struct {
     rank: usize,
     dims: []const usize,
@@ -77,6 +79,7 @@ pub const BuildShape = struct {
     }
 };
 
+/// Tensor value type for graph construction. The value is immutable.
 pub const Value = struct {
     id: Tensor.Id,
     dtype: Dtype,
@@ -96,6 +99,7 @@ pub const TensorRecord = struct {
     source_kind: ?Tensor.Source.Kind = null,
 };
 
+/// Compile-time graph definition. Lowered to a `zgc.Execution.Program` with `model()` or `modelWith()`.
 pub fn Definition(
     comptime SourceKey: type,
     comptime node_count: usize,
@@ -178,6 +182,13 @@ pub const DefinitionBuilder = struct {
             self.source_key_type = &[_]type{SourceKey};
         }
         return .{ .builder = self };
+    }
+
+    pub fn expr(comptime self: *Self, comptime value: Value) Expr {
+        return .{
+            .b = self,
+            .value = value,
+        };
     }
 
     pub fn scalar(comptime self: *Self, comptime dtype: Dtype, comptime value: dtype.Scalar()) Value {

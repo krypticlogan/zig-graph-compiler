@@ -1,6 +1,7 @@
 //! Public ZGC API.
 pub const frontend = struct {
     pub const DefinitionBuilder = @import("zgc/frontend/definition.zig").DefinitionBuilder;
+    pub const Expr = @import("zgc/frontend/expressive.zig");
     pub const Value = @import("zgc/frontend/definition.zig").Value;
     pub const BuildShape = @import("zgc/frontend/definition.zig").BuildShape;
     pub const ReductionOptions = @import("zgc/frontend/definition.zig").ReductionOptions;
@@ -42,6 +43,7 @@ pub const execution = struct {
 };
 
 pub const DefinitionBuilder = frontend.DefinitionBuilder;
+pub const Expr = frontend.Expr;
 pub const Value = frontend.Value;
 pub const BuildShape = frontend.BuildShape;
 pub const ReductionOptions = frontend.ReductionOptions;

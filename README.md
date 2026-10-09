@@ -118,18 +118,14 @@ pub fn main() !void {
 }
 ```
 
-Definition limits have defaults and may be overridden at compile time. These
-are **front-end bounds, not final allocation sizes**. The counting pass derives the
-exact node, tensor, reference, output, source, and rank capacities before graph
-construction and memory planning.
-
 ## Key capabilities
 
 - Front-facing `DefinitionBuilder` with enum-indexed sources composes graphs.
+- Fluent expressions chain operations from `builder.expr(value)`.
+- Arbitrary composite expression functions can be applied with typed arguments for reusable graph-level operations.
 - `definition.model()` constructs, validates, and lowers
   the definition to a complete type and runtime.
 - Reusable, lifetime-planned model memory.
-- Exact graph capacities derived directly from the model.
 - Multiple graph inputs, parameters, constants, and outputs.
 - Source-free scalar literals and zero-stride filled tensors.
 - `f32`, `f16`, `i8`, and strict boolean tensor dtypes.

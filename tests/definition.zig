@@ -4,6 +4,10 @@ const zgc = @import("zgc");
 const Sources = enum(usize) { lhs, rhs, auxiliary };
 const Definition = zgc.DefinitionBuilder;
 
+fn square(comptime expression: zgc.Expr) zgc.Expr {
+    return expression.mul(expression);
+}
+
 test "concrete builder derives finished definition storage and rank" {
     const LocalSources = enum(usize) { input };
     const definition = comptime blk: {
@@ -234,4 +238,57 @@ test "primitive builders infer every math and predicate operation without model 
 
     try std.testing.expectEqual(zgc.memory.Dtype.f32, definition.tensors[definition.tensor_count - 1].value.dtype);
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, definition.tensors[definition.tensor_count - 1].value.shape.slice());
+}
+
+test "fluent expressions reproduce the direct semantic graph" {
+    const direct_definition = comptime blk: {
+        var builder = Definition.init();
+        const sources = builder.sources(Sources);
+        const lhs = sources.input(.lhs, .f32, &.{ 2, 1 });
+        const rhs = sources.input(.rhs, .f32, &.{ 2, 2 });
+        const auxiliary = sources.input(.auxiliary, .f32, &.{ 2, 1 });
+        const joined = builder.concat(&.{ lhs, rhs }, 1);
+        const complete = builder.concat(&.{ joined, auxiliary }, 1);
+        const negated = builder.neg(complete);
+        const magnitude = builder.abs(negated);
+        const squared = builder.mul(magnitude, magnitude);
+        const result = builder.sum(
+            builder.copy(
+                builder.flatten(
+                    builder.transpose(
+                        builder.reshape(squared, &.{ 4, 2 }),
+                        0,
+                        1,
+                    ),
+                    .{},
+                ),
+            ),
+            .{},
+        );
+        builder.output(result);
+        break :blk builder.finish();
+    };
+
+    const fluent_definition = comptime blk: {
+        var builder = Definition.init();
+        const sources = builder.sources(Sources);
+        const lhs = builder.expr(sources.input(.lhs, .f32, &.{ 2, 1 }));
+        const rhs = builder.expr(sources.input(.rhs, .f32, &.{ 2, 2 }));
+        const auxiliary = builder.expr(sources.input(.auxiliary, .f32, &.{ 2, 1 }));
+        const result = lhs
+            .concat(rhs, 1)
+            .concat(auxiliary, 1)
+            .neg()
+            .abs()
+            .apply(square, .{})
+            .reshape(&.{ 4, 2 })
+            .transpose(0, 1)
+            .flatten(.{})
+            .copy()
+            .sum(.{});
+        builder.output(result.value);
+        break :blk builder.finish();
+    };
+
+    try std.testing.expectEqualDeep(direct_definition, fluent_definition);
 }
