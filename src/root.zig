@@ -1,6 +1,8 @@
 //! Public ZGC API.
 pub const frontend = struct {
     pub const DefinitionBuilder = @import("zgc/frontend/definition.zig").DefinitionBuilder;
+    pub const Value = @import("zgc/frontend/definition.zig").Value;
+    pub const BuildShape = @import("zgc/frontend/definition.zig").BuildShape;
     pub const ReductionOptions = @import("zgc/frontend/definition.zig").ReductionOptions;
     pub const FlattenOptions = @import("zgc/frontend/definition.zig").FlattenOptions;
     pub const SliceOptions = @import("zgc/frontend/definition.zig").SliceOptions;
