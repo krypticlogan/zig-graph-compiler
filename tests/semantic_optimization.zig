@@ -2,20 +2,15 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { input, tail, fill, dead };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 1,
-    .max_nodes = 12,
-    .max_tensors = 20,
-    .max_input_refs = 24,
-    .max_outputs = 4,
-});
+const Definition = zgc.DefinitionBuilder;
 
 const OptimizationModel = model: {
     var builder = Definition.init();
-    const input = builder.input(.input, .f32, &.{10});
-    const tail = builder.input(.tail, .f32, &.{1});
-    const fill = builder.input(.fill, .f32, &.{});
-    const dead = builder.input(.dead, .f32, &.{10});
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.input, .f32, &.{10});
+    const tail = builder_sources.input(.tail, .f32, &.{1});
+    const fill = builder_sources.input(.fill, .f32, &.{});
+    const dead = builder_sources.input(.dead, .f32, &.{10});
 
     _ = builder.mul(input, dead);
     const folded = builder.add(builder.scalar(.f32, 2), builder.scalar(.f32, 3));

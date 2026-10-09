@@ -2,50 +2,35 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const ProducerSources = enum(usize) { lhs, rhs };
-const ProducerDefinition = zgc.DefinitionBuilder(ProducerSources, .{
-    .max_rank = 2,
-    .max_nodes = 2,
-    .max_tensors = 4,
-    .max_input_refs = 3,
-    .max_outputs = 1,
-});
+const ProducerDefinition = zgc.DefinitionBuilder;
 const ProducerReductionModel = model: {
     var builder = ProducerDefinition.init();
-    const lhs = builder.input(.lhs, .f32, &.{ 2, 3 });
-    const rhs = builder.input(.rhs, .f32, &.{ 2, 3 });
+    const builder_sources = builder.sources(ProducerSources);
+    const lhs = builder_sources.input(.lhs, .f32, &.{ 2, 3 });
+    const rhs = builder_sources.input(.rhs, .f32, &.{ 2, 3 });
     builder.output(builder.sum(builder.mul(lhs, rhs), .{ .axes = &.{1} }));
     break :model builder.finish().model();
 };
 
 const SiblingSources = enum(usize) { input, weights };
-const SiblingDefinition = zgc.DefinitionBuilder(SiblingSources, .{
-    .max_rank = 2,
-    .max_nodes = 3,
-    .max_tensors = 5,
-    .max_input_refs = 4,
-    .max_outputs = 2,
-});
+const SiblingDefinition = zgc.DefinitionBuilder;
 const SiblingReductionModel = model: {
     var builder = SiblingDefinition.init();
-    const input = builder.input(.input, .f32, &.{ 2, 3 });
-    const weights = builder.parameter(.weights, .f32, &.{3});
+    const builder_sources = builder.sources(SiblingSources);
+    const input = builder_sources.input(.input, .f32, &.{ 2, 3 });
+    const weights = builder_sources.parameter(.weights, .f32, &.{3});
     builder.output(builder.sum(input, .{ .axes = &.{1} }));
     builder.output(builder.max(builder.mul(input, weights), .{ .axes = &.{1} }));
     break :model builder.finish().model();
 };
 
 const TypedPointwiseSources = enum(usize) { input, threshold };
-const TypedPointwiseDefinition = zgc.DefinitionBuilder(TypedPointwiseSources, .{
-    .max_rank = 1,
-    .max_nodes = 3,
-    .max_tensors = 5,
-    .max_input_refs = 6,
-    .max_outputs = 1,
-});
+const TypedPointwiseDefinition = zgc.DefinitionBuilder;
 const TypedPointwiseModel = model: {
     var builder = TypedPointwiseDefinition.init();
-    const input = builder.input(.input, .f32, &.{8});
-    const threshold = builder.input(.threshold, .f32, &.{8});
+    const builder_sources = builder.sources(TypedPointwiseSources);
+    const input = builder_sources.input(.input, .f32, &.{8});
+    const threshold = builder_sources.input(.threshold, .f32, &.{8});
     const positive = builder.greaterThan(input, threshold);
     builder.output(builder.where(positive, input, builder.neg(input)));
     break :model builder.finish().model();
@@ -54,34 +39,25 @@ const TypedPointwiseModel = model: {
 const reduction_vector_width = std.simd.suggestVectorLength(f32) orelse 1;
 const reduction_vector_length = reduction_vector_width + 1;
 const VectorReductionSources = enum(usize) { input, weights };
-const VectorReductionDefinition = zgc.DefinitionBuilder(VectorReductionSources, .{
-    .max_rank = 2,
-    .max_nodes = 2,
-    .max_tensors = 4,
-    .max_input_refs = 3,
-    .max_outputs = 1,
-});
+const VectorReductionDefinition = zgc.DefinitionBuilder;
 const VectorReductionModel = model: {
     var builder = VectorReductionDefinition.init();
-    const input = builder.input(.input, .f32, &.{ 2, reduction_vector_length });
-    const weights = builder.input(.weights, .f32, &.{reduction_vector_length});
+    const builder_sources = builder.sources(VectorReductionSources);
+    const input = builder_sources.input(.input, .f32, &.{ 2, reduction_vector_length });
+    const weights = builder_sources.input(.weights, .f32, &.{reduction_vector_length});
     builder.output(builder.sum(builder.mul(input, weights), .{ .axes = &.{1} }));
     break :model builder.finish().model();
 };
 
 const map_vector_width = std.simd.suggestVectorLength(f32) orelse 1;
 const map_vector_length = map_vector_width + 1;
-const BroadcastMapDefinition = zgc.DefinitionBuilder(enum(usize) { cells, channels }, .{
-    .max_rank = 3,
-    .max_nodes = 2,
-    .max_tensors = 5,
-    .max_input_refs = 4,
-    .max_outputs = 1,
-});
+const BroadcastMapDefinitionSources = enum(usize) { cells, channels };
+const BroadcastMapDefinition = zgc.DefinitionBuilder;
 const BroadcastMapModel = model: {
     var builder = BroadcastMapDefinition.init();
-    const cells = builder.input(.cells, .f32, &.{ 2, 3, 1 });
-    const channels = builder.input(.channels, .f32, &.{map_vector_length});
+    const builder_sources = builder.sources(BroadcastMapDefinitionSources);
+    const cells = builder_sources.input(.cells, .f32, &.{ 2, 3, 1 });
+    const channels = builder_sources.input(.channels, .f32, &.{map_vector_length});
     builder.output(builder.add(builder.mul(cells, channels), builder.scalar(.f32, 1)));
     break :model builder.finish().model();
 };

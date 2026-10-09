@@ -83,11 +83,12 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { input, weights }; // user-defined source keys
-const Definition = zgc.DefinitionBuilder(Sources, .{ .max_rank = 2 });
+const Definition = zgc.DefinitionBuilder;
 
 fn define(builder: *Definition) void { // complete graph architecture is defined here
-    const input = builder.input(.input, .f32, &.{ 4, 8 });
-    const weights = builder.parameter(.weights, .f32, &.{ 8, 16 });
+    const sources = builder.sources(Sources);
+    const input = sources.input(.input, .f32, &.{ 4, 8 });
+    const weights = sources.parameter(.weights, .f32, &.{ 8, 16 });
     builder.output(
         builder.relu(
             builder.matmul(input, weights)

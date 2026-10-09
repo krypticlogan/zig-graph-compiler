@@ -3,13 +3,7 @@ const zgc = @import("zgc");
 const models = @import("fixtures/models.zig");
 
 const Sources = enum(usize) { input };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 6,
-    .max_tensors = 7,
-    .max_input_refs = 6,
-    .max_outputs = 2,
-});
+const Definition = zgc.DefinitionBuilder;
 
 test "lifetime analysis produces half-open intermediate intervals" {
     const lifetimes = models.ReuseModel.lifetime_analysis.tensor_lifetimes;
@@ -25,7 +19,8 @@ test "lifetime analysis produces half-open intermediate intervals" {
 test "alias uses extend the lifetime of root storage" {
     const definition = comptime blk: {
         var builder = Definition.init();
-        const input = builder.input(.input, .f32, &.{ 2, 2 });
+        const builder_sources = builder.sources(Sources);
+        const input = builder_sources.input(.input, .f32, &.{ 2, 2 });
         const root = builder.relu(input);
         const alias = builder.transpose(root, 0, 1);
         builder.output(builder.relu(alias));
@@ -45,7 +40,8 @@ test "alias uses extend the lifetime of root storage" {
 test "output aliases make their root storage persistent" {
     const definition = comptime blk: {
         var builder = Definition.init();
-        const input = builder.input(.input, .f32, &.{ 2, 2 });
+        const builder_sources = builder.sources(Sources);
+        const input = builder_sources.input(.input, .f32, &.{ 2, 2 });
         const root = builder.relu(input);
         builder.output(builder.transpose(root, 0, 1));
         break :blk builder.finish();

@@ -6,19 +6,14 @@ const columns = 256;
 const element_count = rows * columns;
 
 const Sources = enum(usize) { lhs, rhs, bias };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 4,
-    .max_tensors = 8,
-    .max_input_refs = 8,
-    .max_outputs = 1,
-});
+const Definition = zgc.DefinitionBuilder;
 
 const definition = blk: {
     var builder = Definition.init();
-    const lhs = builder.input(.lhs, .f32, &.{ rows, columns });
-    const rhs = builder.input(.rhs, .f32, &.{ rows, columns });
-    const bias = builder.input(.bias, .f32, &.{columns});
+    const builder_sources = builder.sources(Sources);
+    const lhs = builder_sources.input(.lhs, .f32, &.{ rows, columns });
+    const rhs = builder_sources.input(.rhs, .f32, &.{ rows, columns });
+    const bias = builder_sources.input(.bias, .f32, &.{columns});
     const expression = builder.add(builder.mul(lhs, rhs), bias);
     builder.output(builder.sum(expression, .{ .axes = &.{1} }));
     break :blk builder.finish();

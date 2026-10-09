@@ -2,17 +2,12 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const LifeSources = enum(usize) { world };
-const LifeDefinition = zgc.DefinitionBuilder(LifeSources, .{
-    .max_rank = 4,
-    .max_nodes = 12,
-    .max_tensors = 18,
-    .max_input_refs = 24,
-    .max_outputs = 1,
-});
+const LifeDefinition = zgc.DefinitionBuilder;
 
 const life_step = model: {
     var builder = LifeDefinition.init();
-    const world = builder.input(.world, .bool, &.{ 3, 3 });
+    const builder_sources = builder.sources(LifeSources);
+    const world = builder_sources.input(.world, .bool, &.{ 3, 3 });
     const dead = builder.scalar(.bool, false);
     const padded = builder.pad(world, dead, .{
         .before = &.{ 1, 1 },
@@ -61,17 +56,12 @@ test "padding and one overlapping window view express a Conway step" {
 }
 
 const WindowSources = enum(usize) { input };
-const WindowDefinition = zgc.DefinitionBuilder(WindowSources, .{
-    .max_rank = 2,
-    .max_nodes = 2,
-    .max_tensors = 3,
-    .max_input_refs = 2,
-    .max_outputs = 1,
-});
+const WindowDefinition = zgc.DefinitionBuilder;
 
 const dilated_windows = model: {
     var builder = WindowDefinition.init();
-    const input = builder.input(.input, .i8, &.{7});
+    const builder_sources = builder.sources(WindowSources);
+    const input = builder_sources.input(.input, .i8, &.{7});
     const windows = builder.windows(input, .{
         .sizes = &.{3},
         .strides = &.{2},

@@ -1,3 +1,5 @@
+const DefinitionBuilder = @import("../zgc/frontend/definition.zig").DefinitionBuilder;
+const Value = @import("../zgc/frontend/definition.zig").Value;
 pub const Activation = enum {
     none,
     relu,
@@ -5,9 +7,9 @@ pub const Activation = enum {
 
     pub fn apply(
         comptime activation: Activation,
-        builder: anytype,
-        comptime value: @TypeOf(builder.*).TensorValue,
-    ) @TypeOf(builder.*).TensorValue {
+        builder: *DefinitionBuilder,
+        comptime value: Value,
+    ) Value {
         return switch (activation) {
             .none => value,
             .relu => builder.relu(value),
@@ -37,9 +39,9 @@ pub fn Dense(comptime SourceKey: type) type {
 
         pub fn apply(
             comptime layer: Self,
-            builder: anytype,
-            comptime input: @TypeOf(builder.*).TensorValue,
-        ) @TypeOf(builder.*).TensorValue {
+            builder: *DefinitionBuilder,
+            comptime input: Value,
+        ) Value {
             if (input.shape.rank != 2) {
                 @compileError("zgc.ext.nn.Dense requires a rank-2 [batch, features] input");
             }
@@ -55,7 +57,8 @@ pub fn Dense(comptime SourceKey: type) type {
                 .input_output => &.{ input_size, layer.output_size },
                 .output_input => &.{ layer.output_size, input_size },
             };
-            const stored_weights = builder.parameter(
+            const sources = builder.sources(SourceKey);
+            const stored_weights = sources.parameter(
                 layer.weights,
                 input.dtype,
                 stored_shape,
@@ -64,7 +67,7 @@ pub fn Dense(comptime SourceKey: type) type {
                 .input_output => stored_weights,
                 .output_input => builder.transpose(stored_weights, 0, 1),
             };
-            const bias = builder.parameter(
+            const bias = sources.parameter(
                 layer.bias,
                 input.dtype,
                 &.{layer.output_size},
@@ -87,9 +90,9 @@ pub fn Sequential(comptime layers: anytype) type {
         pub const layer_count = layers.len;
 
         pub fn apply(
-            builder: anytype,
-            comptime input: @TypeOf(builder.*).TensorValue,
-        ) @TypeOf(builder.*).TensorValue {
+            builder: *DefinitionBuilder,
+            comptime input: Value,
+        ) Value {
             var value = input;
             inline for (layers) |layer| {
                 value = layer.apply(builder, value);

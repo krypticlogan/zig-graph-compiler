@@ -6,17 +6,12 @@ const columns = 256;
 const element_count = rows * columns;
 
 const Sources = enum(usize) { input };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 4,
-    .max_tensors = 5,
-    .max_input_refs = 4,
-    .max_outputs = 4,
-});
+const Definition = zgc.DefinitionBuilder;
 
 const definition = blk: {
     var builder = Definition.init();
-    const input = builder.input(.input, .f32, &.{ rows, columns });
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.input, .f32, &.{ rows, columns });
     builder.output(builder.sum(input, .{ .axes = &.{1} }));
     builder.output(builder.mean(input, .{ .axes = &.{1} }));
     builder.output(builder.min(input, .{ .axes = &.{1} }));

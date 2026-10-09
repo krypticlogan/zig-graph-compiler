@@ -5,14 +5,7 @@ const op_module = @import("../operations/semantic.zig");
 const Op = op_module.Op;
 const SourceStorage = @import("../storage/source.zig");
 const Tensor = @import("../core/tensor.zig");
-const Capacity = @import("../core/graph.zig").Capacity;
-pub const Limits = struct {
-    max_rank: usize = 8,
-    max_nodes: usize = 64,
-    max_tensors: usize = 128,
-    max_input_refs: usize = 192,
-    max_outputs: usize = 8,
-};
+const EmptySourceKey = enum(usize) {};
 
 /// Axes omitted with `null` reduce the entire tensor. Reduced dimensions are
 /// removed unless `keep_dims` retains them as singleton dimensions.
@@ -57,20 +50,64 @@ pub const WindowOptions = struct {
     dilations: ?[]const usize = null,
 };
 
-pub fn Value(comptime max_rank: usize) type {
-    return struct {
-        id: Tensor.Id,
-        dtype: Dtype,
-        shape: Tensor.Shape(max_rank),
-    };
-}
+pub const BuildShape = struct {
+    rank: usize,
+    dims: []const usize,
 
-pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
+    pub fn init(comptime dims: []const usize) BuildShape {
+        for (dims) |extent| {
+            if (extent == 0) @compileError("tensor dimensions must be greater than zero");
+        }
+        const owned_dims = dims[0..dims.len].*;
+        return .{ .rank = dims.len, .dims = &owned_dims };
+    }
+
+    pub fn slice(self: BuildShape) []const usize {
+        return self.dims;
+    }
+
+    pub fn at(self: BuildShape, axis: usize) usize {
+        return self.dims[axis];
+    }
+
+    pub fn elementCount(self: BuildShape) usize {
+        var count: usize = 1;
+        for (self.dims) |extent| count *= extent;
+        return count;
+    }
+};
+
+pub const Value = struct {
+    id: Tensor.Id,
+    dtype: Dtype,
+    shape: BuildShape,
+};
+
+pub const Node = struct {
+    op: Op,
+    input_start: usize,
+    input_count: usize,
+    result: Tensor.Id,
+};
+
+pub const TensorRecord = struct {
+    value: Value,
+    origin: Tensor.Origin,
+    source_kind: ?Tensor.Source.Kind = null,
+};
+
+pub fn Definition(
+    comptime SourceKey: type,
+    comptime node_count: usize,
+    comptime tensor_count: usize,
+    comptime input_ref_count: usize,
+    comptime output_count: usize,
+    comptime rank_capacity: usize,
+) type {
     return struct {
         const Self = @This();
-        pub const max_rank = limits.max_rank;
+        pub const max_rank = rank_capacity;
         pub const Source = SourceKey;
-        pub const ValueType = Value(max_rank);
         pub const SourceOverride = struct {
             /// Source enum tag whose default ownership policy is replaced.
             source: SourceKey,
@@ -78,27 +115,14 @@ pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
             binding: SourceStorage.Binding,
         };
 
-        const Node = struct {
-            op: Op,
-            input_start: usize,
-            input_count: usize,
-            result: Tensor.Id,
-        };
-
-        const TensorRecord = struct {
-            value: ValueType,
-            origin: Tensor.Origin,
-            source_kind: ?Tensor.Source.Kind = null,
-        };
-
-        nodes: [limits.max_nodes]Node = undefined,
-        tensors: [limits.max_tensors]TensorRecord = undefined,
-        input_refs: [limits.max_input_refs]Tensor.Id = undefined,
-        outputs: [limits.max_outputs]Tensor.Id = undefined,
-        node_count: usize = 0,
-        tensor_count: usize = 0,
-        input_ref_count: usize = 0,
-        output_count: usize = 0,
+        nodes: [node_count]Node,
+        tensors: [tensor_count]TensorRecord,
+        input_refs: [input_ref_count]Tensor.Id,
+        outputs: [output_count]Tensor.Id,
+        node_count: usize = node_count,
+        tensor_count: usize = tensor_count,
+        input_ref_count: usize = input_ref_count,
+        output_count: usize = output_count,
 
         /// Run capacity counting, graph lowering, memory planning, and model
         /// generation for this completed definition.
@@ -114,590 +138,628 @@ pub fn Definition(comptime SourceKey: type, comptime limits: Limits) type {
         pub fn modelWith(comptime definition: Self, comptime sources: []const SourceOverride) type {
             return @import("../compiler/root.zig").model(Self, definition, sources);
         }
+    };
+}
 
-        pub fn counts(comptime definition: Definition) Capacity {
-            var capacity: Capacity = .{
-                .max_nodes = definition.node_count,
-                .max_input_refs = definition.input_ref_count,
-                .max_tensors = definition.tensor_count,
-                .max_outputs = definition.output_count,
-            };
+/// Capacity-free graph construction interface.
+pub const DefinitionBuilder = struct {
+    const Self = @This();
+    pub const ShiftBoundary = union(enum) {
+        wrap,
+        edge,
+        reflect,
+        constant: Value,
+    };
+    pub const SliceLoopIteration = Op.Compute.SliceLoopAttrs.Iteration;
+    pub const SliceLoopBoundary = Op.Compute.SliceLoopAttrs.Boundary;
+    pub const SliceLoopOptions = struct {
+        axis: i8,
+        iterations: []const SliceLoopIteration,
+    };
 
-            for (definition.tensors[0..definition.tensor_count]) |record| {
-                capacity.max_rank = @max(capacity.max_rank, record.value.shape.rank);
-                switch (record.origin) {
-                    .source => |source_index| {
-                        capacity.max_sources = @max(capacity.max_sources, source_index + 1);
-                    },
-                    .node, .literal => {},
-                }
+    nodes: []const Node = &.{},
+    tensors: []const TensorRecord = &.{},
+    input_refs: []const Tensor.Id = &.{},
+    outputs: []const Tensor.Id = &.{},
+    source_key_type: ?[]const type = null,
+
+    pub fn init() Self {
+        @setEvalBranchQuota(100_000);
+        return .{};
+    }
+
+    pub fn sources(comptime self: *Self, comptime SourceKey: type) Sources(SourceKey) {
+        validateSourceKey(SourceKey);
+        if (self.source_key_type) |existing| {
+            if (existing[0] != SourceKey) {
+                @compileError("a definition may only use one source key type");
             }
-            return capacity;
+        } else {
+            self.source_key_type = &[_]type{SourceKey};
+        }
+        return .{ .builder = self };
+    }
+
+    pub fn scalar(comptime self: *Self, comptime dtype: Dtype, comptime value: dtype.Scalar()) Value {
+        const tensor_id = self.tensors.len;
+        const tensor_value: Value = .{
+            .id = tensor_id,
+            .dtype = dtype,
+            .shape = BuildShape.init(&.{}),
+        };
+        self.appendTensor(.{
+            .value = tensor_value,
+            .origin = .{ .literal = ScalarValue.init(dtype, value) },
+        });
+        return tensor_value;
+    }
+
+    pub fn full(
+        self: *Self,
+        comptime dtype: Dtype,
+        comptime extents: []const usize,
+        comptime value: dtype.Scalar(),
+    ) Value {
+        const scalar_value = self.scalar(dtype, value);
+        if (extents.len == 0) return scalar_value;
+        return self.broadcastTo(scalar_value, extents);
+    }
+
+    pub fn relu(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.relu, &.{tensor});
+    }
+
+    pub fn exp(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.exp, &.{tensor});
+    }
+
+    pub fn neg(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.neg, &.{tensor});
+    }
+
+    pub fn abs(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.abs, &.{tensor});
+    }
+
+    pub fn sqrt(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.sqrt, &.{tensor});
+    }
+
+    pub fn log(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.log, &.{tensor});
+    }
+
+    pub fn reciprocal(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.reciprocal, &.{tensor});
+    }
+
+    pub fn add(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.add, &.{ lhs, rhs });
+    }
+
+    pub fn sub(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.sub, &.{ lhs, rhs });
+    }
+
+    pub fn mul(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.mul, &.{ lhs, rhs });
+    }
+
+    pub fn div(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.div, &.{ lhs, rhs });
+    }
+
+    pub fn minimum(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.minimum, &.{ lhs, rhs });
+    }
+
+    pub fn maximum(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.maximum, &.{ lhs, rhs });
+    }
+
+    pub fn clamp(
+        self: *Self,
+        comptime tensor: Value,
+        comptime lower: Value,
+        comptime upper: Value,
+    ) Value {
+        return self.addCompute(.clamp, &.{ tensor, lower, upper });
+    }
+
+    pub fn equal(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.equal, &.{ lhs, rhs });
+    }
+
+    pub fn notEqual(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.not_equal, &.{ lhs, rhs });
+    }
+
+    pub fn lessThan(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.less_than, &.{ lhs, rhs });
+    }
+
+    pub fn lessEqual(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.less_equal, &.{ lhs, rhs });
+    }
+
+    pub fn greaterThan(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.greater_than, &.{ lhs, rhs });
+    }
+
+    pub fn greaterEqual(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.greater_equal, &.{ lhs, rhs });
+    }
+
+    pub fn logicalNot(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.logical_not, &.{tensor});
+    }
+
+    pub fn logicalAnd(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.logical_and, &.{ lhs, rhs });
+    }
+
+    pub fn logicalOr(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.logical_or, &.{ lhs, rhs });
+    }
+
+    pub fn where(
+        self: *Self,
+        comptime condition: Value,
+        comptime when_true: Value,
+        comptime when_false: Value,
+    ) Value {
+        return self.addCompute(.where, &.{ condition, when_true, when_false });
+    }
+
+    /// Materialize a tensor into fresh storage. Lowering may preserve a
+    /// useful physical layout while retaining the tensor's logical shape.
+    pub fn copy(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.copy, &.{tensor});
+    }
+
+    /// Materialize a tensor into fresh logical row-major storage.
+    pub fn contiguous(self: *Self, comptime tensor: Value) Value {
+        return self.addCompute(.contiguous, &.{tensor});
+    }
+
+    /// Materialize constant padding around every input axis.
+    pub fn pad(
+        self: *Self,
+        comptime tensor: Value,
+        comptime fill: Value,
+        comptime options: PadOptions,
+    ) Value {
+        return self.addCompute(.{ .pad = .{
+            .before = options.before,
+            .after = options.after,
+        } }, &.{ tensor, fill });
+    }
+
+    /// Materialize a translated tensor with one signed offset per axis.
+    /// Positive offsets move input values toward higher output coordinates.
+    pub fn shift(
+        self: *Self,
+        comptime tensor: Value,
+        comptime offsets: []const isize,
+        comptime boundary: ShiftBoundary,
+    ) Value {
+        const mode: Op.Compute.ShiftAttrs.Boundary = switch (boundary) {
+            .wrap => .wrap,
+            .edge => .edge,
+            .reflect => .reflect,
+            .constant => .constant,
+        };
+        const attrs: Op.Compute.ShiftAttrs = .{
+            .offsets = offsets,
+            .boundary = mode,
+        };
+        return switch (boundary) {
+            .constant => |fill| self.addCompute(.{ .shift = attrs }, &.{ tensor, fill }),
+            else => self.addCompute(.{ .shift = attrs }, &.{tensor}),
+        };
+    }
+
+    /// Apply one statically described transform per slice without
+    /// expanding the iterations into separate graph nodes.
+    pub fn sliceLoop(
+        self: *Self,
+        comptime tensor: Value,
+        comptime options: SliceLoopOptions,
+    ) Value {
+        const axis = normalizeAxis(tensor.shape.rank, options.axis);
+        return self.addCompute(.{ .slice_loop = .{
+            .axis = @intCast(axis),
+            .iterations = options.iterations,
+        } }, &.{tensor});
+    }
+
+    pub fn matmul(self: *Self, comptime lhs: Value, comptime rhs: Value) Value {
+        return self.addCompute(.matmul, &.{ lhs, rhs });
+    }
+
+    pub fn sum(self: *Self, comptime tensor: Value, comptime options: ReductionOptions) Value {
+        return self.addCompute(.{ .sum = reductionAttrs(tensor, options) }, &.{tensor});
+    }
+
+    pub fn mean(self: *Self, comptime tensor: Value, comptime options: ReductionOptions) Value {
+        return self.addCompute(.{ .mean = reductionAttrs(tensor, options) }, &.{tensor});
+    }
+
+    pub fn min(self: *Self, comptime tensor: Value, comptime options: ReductionOptions) Value {
+        return self.addCompute(.{ .min = reductionAttrs(tensor, options) }, &.{tensor});
+    }
+
+    pub fn max(self: *Self, comptime tensor: Value, comptime options: ReductionOptions) Value {
+        return self.addCompute(.{ .max = reductionAttrs(tensor, options) }, &.{tensor});
+    }
+
+    pub fn concat(
+        self: *Self,
+        comptime inputs: []const Value,
+        comptime axis: i8,
+    ) Value {
+        if (inputs.len == 0) @compileError("concat requires at least one input");
+        const normalized = normalizeAxis(inputs[0].shape.rank, axis);
+        return self.addCompute(.{ .concat = .{ .axis = @intCast(normalized) } }, inputs);
+    }
+
+    pub fn softmax(self: *Self, comptime tensor: Value, comptime axis: i8) Value {
+        return self.addCompute(.{ .softmax = .{ .axis = @intCast(normalizeAxis(tensor.shape.rank, axis)) } }, &.{tensor});
+    }
+
+    pub fn transpose(
+        self: *Self,
+        comptime tensor: Value,
+        comptime axis_a: i8,
+        comptime axis_b: i8,
+    ) Value {
+        const normalized_a = normalizeAxis(tensor.shape.rank, axis_a);
+        const normalized_b = normalizeAxis(tensor.shape.rank, axis_b);
+        var dims: [tensor.shape.rank]usize = tensor.shape.slice()[0..tensor.shape.rank].*;
+        std.mem.swap(usize, &dims[normalized_a], &dims[normalized_b]);
+        const shape = BuildShape.init(&dims);
+        return self.addNode(
+            .{ .view = .{ .transpose = .{
+                .axis_a = @intCast(normalized_a),
+                .axis_b = @intCast(normalized_b),
+            } } },
+            &.{tensor},
+            tensor.dtype,
+            shape,
+        );
+    }
+
+    pub fn reshape(
+        self: *Self,
+        comptime tensor: Value,
+        comptime extents: []const usize,
+    ) Value {
+        const shape = BuildShape.init(extents);
+        if (shape.elementCount() != tensor.shape.elementCount()) {
+            @compileError("reshape must preserve the tensor element count");
+        }
+        return self.addNode(.{ .view = .reshape }, &.{tensor}, tensor.dtype, shape);
+    }
+
+    pub fn broadcastTo(
+        self: *Self,
+        comptime tensor: Value,
+        comptime extents: []const usize,
+    ) Value {
+        if (tensor.shape.rank > extents.len) @compileError("broadcast target rank cannot be smaller than its source rank");
+        for (extents) |extent| {
+            if (extent == 0) @compileError("tensor dimensions must be greater than zero");
+        }
+        const rank_offset = extents.len - tensor.shape.rank;
+        for (tensor.shape.slice(), 0..) |source_extent, source_axis| {
+            const target_extent = extents[rank_offset + source_axis];
+            if (source_extent != 1 and source_extent != target_extent) {
+                @compileError("broadcast source extent must equal its target or be one");
+            }
+        }
+        const shape = BuildShape.init(extents);
+        return self.addNode(.{ .view = .broadcast }, &.{tensor}, tensor.dtype, shape);
+    }
+
+    pub fn flatten(
+        self: *Self,
+        comptime tensor: Value,
+        comptime options: FlattenOptions,
+    ) Value {
+        const start_axis = normalizeAxis(tensor.shape.rank, options.start_axis);
+        const end_axis = normalizeAxis(tensor.shape.rank, options.end_axis);
+        if (start_axis > end_axis) @compileError("flatten start_axis must not follow end_axis");
+
+        const output_rank = tensor.shape.rank - (end_axis - start_axis);
+        var dims: [output_rank]usize = undefined;
+        var output_axis: usize = 0;
+        for (tensor.shape.slice()[0..start_axis]) |extent| {
+            dims[output_axis] = extent;
+            output_axis += 1;
+        }
+        var flattened_extent: usize = 1;
+        for (tensor.shape.slice()[start_axis .. end_axis + 1]) |extent| flattened_extent *= extent;
+        dims[output_axis] = flattened_extent;
+        output_axis += 1;
+        for (tensor.shape.slice()[end_axis + 1 ..]) |extent| {
+            dims[output_axis] = extent;
+            output_axis += 1;
+        }
+        const shape = BuildShape.init(&dims);
+
+        return self.addNode(.{ .view = .{ .flatten = .{
+            .start_axis = @intCast(start_axis),
+            .end_axis = @intCast(end_axis),
+        } } }, &.{tensor}, tensor.dtype, shape);
+    }
+
+    pub fn squeeze(self: *Self, comptime tensor: Value, comptime axis: i8) Value {
+        const normalized = normalizeAxis(tensor.shape.rank, axis);
+        if (tensor.shape.at(normalized) != 1) @compileError("squeeze axis must have extent one");
+
+        var dims: [tensor.shape.rank - 1]usize = undefined;
+        var output_axis: usize = 0;
+        for (tensor.shape.slice(), 0..) |extent, input_axis| {
+            if (input_axis == normalized) continue;
+            dims[output_axis] = extent;
+            output_axis += 1;
+        }
+        const shape = BuildShape.init(&dims);
+        return self.addNode(.{ .view = .{ .squeeze = .{ .axis = @intCast(normalized) } } }, &.{tensor}, tensor.dtype, shape);
+    }
+
+    pub fn unsqueeze(self: *Self, comptime tensor: Value, comptime axis: i8) Value {
+        const normalized = normalizeInsertionAxis(tensor.shape.rank, axis);
+        var dims: [tensor.shape.rank + 1]usize = undefined;
+        for (0..dims.len) |output_axis| {
+            dims[output_axis] = if (output_axis < normalized)
+                tensor.shape.at(output_axis)
+            else if (output_axis == normalized)
+                1
+            else
+                tensor.shape.at(output_axis - 1);
+        }
+        const shape = BuildShape.init(&dims);
+        return self.addNode(.{ .view = .{ .unsqueeze = .{ .axis = @intCast(normalized) } } }, &.{tensor}, tensor.dtype, shape);
+    }
+
+    pub fn permute(
+        self: *Self,
+        comptime tensor: Value,
+        comptime axes: []const i8,
+    ) Value {
+        if (axes.len != tensor.shape.rank) @compileError("permute requires one axis for every input dimension");
+        var current_axes: [tensor.shape.rank]usize = undefined;
+        var target_axes: [tensor.shape.rank]usize = undefined;
+        for (0..tensor.shape.rank) |axis| current_axes[axis] = axis;
+        for (axes, 0..) |axis, index| {
+            const normalized = normalizeAxis(tensor.shape.rank, axis);
+            for (target_axes[0..index]) |previous| {
+                if (previous == normalized) @compileError("permute axes must be unique");
+            }
+            target_axes[index] = normalized;
+        }
+
+        var result = tensor;
+        for (target_axes[0..tensor.shape.rank], 0..) |target_axis, output_axis| {
+            var current_position = output_axis;
+            while (current_axes[current_position] != target_axis) : (current_position += 1) {}
+            if (current_position == output_axis) continue;
+            result = self.transpose(result, @intCast(output_axis), @intCast(current_position));
+            std.mem.swap(usize, &current_axes[output_axis], &current_axes[current_position]);
+        }
+        return result;
+    }
+
+    pub fn slice(
+        self: *Self,
+        comptime tensor: Value,
+        comptime options: SliceOptions,
+    ) Value {
+        const axis = normalizeAxis(tensor.shape.rank, options.axis);
+        const extent = tensor.shape.at(axis);
+        const end = options.end orelse extent;
+        if (options.step == 0) @compileError("slice step must be greater than zero");
+        if (options.start >= end or end > extent) {
+            @compileError("slice bounds must select a non-empty range within the axis");
+        }
+        const length = (end - options.start + options.step - 1) / options.step;
+        var dims: [tensor.shape.rank]usize = tensor.shape.slice()[0..tensor.shape.rank].*;
+        dims[axis] = length;
+        const shape = BuildShape.init(&dims);
+        return self.addNode(.{ .view = .{ .slice = .{
+            .axis = @intCast(axis),
+            .start = options.start,
+            .length = length,
+            .step = options.step,
+        } } }, &.{tensor}, tensor.dtype, shape);
+    }
+
+    /// Expose overlapping windows over the trailing input axes. Output
+    /// position axes retain their input positions and window axes append
+    /// to the result.
+    pub fn windows(
+        self: *Self,
+        comptime tensor: Value,
+        comptime options: WindowOptions,
+    ) Value {
+        const attrs: Op.View.WindowAttrs = .{
+            .sizes = options.sizes,
+            .strides = options.strides,
+            .dilations = options.dilations,
+        };
+        const inferred = op_module.inferWindowsShape(&.{tensor}, attrs, tensor.shape.rank + attrs.sizes.len);
+        return self.addNode(.{ .view = .{ .windows = attrs } }, &.{tensor}, tensor.dtype, BuildShape.init(inferred.slice()));
+    }
+
+    pub fn output(comptime self: *Self, comptime value: Value) void {
+        self.outputs = self.outputs ++ &[_]Tensor.Id{value.id};
+    }
+
+    pub fn finish(comptime self: *const Self) Definition(
+        self.sourceKey(),
+        self.nodes.len,
+        self.tensors.len,
+        self.input_refs.len,
+        self.outputs.len,
+        maximumRank(self.tensors),
+    ) {
+        const SourceKey = self.sourceKey();
+        validateSources(self.tensors, SourceKey);
+        const Result = Definition(
+            SourceKey,
+            self.nodes.len,
+            self.tensors.len,
+            self.input_refs.len,
+            self.outputs.len,
+            maximumRank(self.tensors),
+        );
+        return Result{
+            .nodes = self.nodes[0..self.nodes.len].*,
+            .tensors = self.tensors[0..self.tensors.len].*,
+            .input_refs = self.input_refs[0..self.input_refs.len].*,
+            .outputs = self.outputs[0..self.outputs.len].*,
+        };
+    }
+
+    fn sourceKey(comptime self: *const Self) type {
+        return if (self.source_key_type) |source_key| source_key[0] else EmptySourceKey;
+    }
+
+    fn addSource(
+        comptime self: *Self,
+        comptime source_index: usize,
+        comptime kind: Tensor.Source.Kind,
+        comptime dtype: Dtype,
+        comptime shape_extents: []const usize,
+    ) Value {
+        for (self.tensors) |tensor| switch (tensor.origin) {
+            .source => |existing| if (existing == source_index) @compileError("a source key may only be defined once"),
+            .node, .literal => {},
+        };
+
+        const id = self.tensors.len;
+        const value: Value = .{
+            .id = id,
+            .dtype = dtype,
+            .shape = BuildShape.init(shape_extents),
+        };
+        self.appendTensor(.{
+            .value = value,
+            .origin = .{ .source = source_index },
+            .source_kind = kind,
+        });
+        return value;
+    }
+
+    fn addCompute(
+        self: *Self,
+        comptime compute: Op.Compute,
+        comptime inputs: []const Value,
+    ) Value {
+        const shape_capacity = maximumInputRank(inputs);
+        const InferenceValue = struct {
+            dtype: Dtype,
+            shape: Tensor.Shape(shape_capacity),
+        };
+        var inference_inputs: [inputs.len]InferenceValue = undefined;
+        inline for (inputs, 0..) |input, index| {
+            inference_inputs[index] = .{
+                .dtype = input.dtype,
+                .shape = .init(input.shape.slice()),
+            };
+        }
+        const inferred = compute.inferShape(&inference_inputs, shape_capacity);
+        const dtype = compute.inferDtype(inputs);
+        return self.addNode(.{ .compute = compute }, inputs, dtype, BuildShape.init(inferred.slice()));
+    }
+
+    fn addNode(
+        self: *Self,
+        comptime op: Op,
+        comptime inputs: []const Value,
+        comptime dtype: Dtype,
+        comptime shape: BuildShape,
+    ) Value {
+        const node_id = self.nodes.len;
+        const tensor_id = self.tensors.len;
+        const input_start = self.input_refs.len;
+        for (inputs) |input_value| {
+            self.input_refs = self.input_refs ++ &[_]Tensor.Id{input_value.id};
+        }
+        self.appendNode(.{
+            .op = op,
+            .input_start = input_start,
+            .input_count = inputs.len,
+            .result = tensor_id,
+        });
+        const value: Value = .{ .id = tensor_id, .dtype = dtype, .shape = shape };
+        self.appendTensor(.{
+            .value = value,
+            .origin = .{ .node = node_id },
+        });
+        return value;
+    }
+
+    fn appendNode(comptime self: *Self, comptime node: Node) void {
+        self.nodes = self.nodes ++ &[_]Node{node};
+    }
+
+    fn appendTensor(comptime self: *Self, comptime tensor: TensorRecord) void {
+        self.tensors = self.tensors ++ &[_]TensorRecord{tensor};
+    }
+
+    fn reductionAttrs(comptime tensor: Value, comptime options: ReductionOptions) Op.Compute.ReductionAttrs {
+        return .{
+            .axes = reductionAxesMask(tensor.shape.rank, options.axes),
+            .keep_dims = options.keep_dims,
+        };
+    }
+};
+
+pub fn Sources(comptime SourceKey: type) type {
+    return struct {
+        builder: *DefinitionBuilder,
+
+        pub fn input(
+            comptime self: @This(),
+            comptime key: SourceKey,
+            comptime dtype: Dtype,
+            comptime shape: []const usize,
+        ) Value {
+            return self.builder.addSource(@intCast(@intFromEnum(key)), .input, dtype, shape);
+        }
+
+        pub fn parameter(
+            comptime self: @This(),
+            comptime key: SourceKey,
+            comptime dtype: Dtype,
+            comptime shape: []const usize,
+        ) Value {
+            return self.builder.addSource(@intCast(@intFromEnum(key)), .parameter, dtype, shape);
+        }
+
+        pub fn constant(
+            comptime self: @This(),
+            comptime key: SourceKey,
+            comptime dtype: Dtype,
+            comptime shape: []const usize,
+        ) Value {
+            return self.builder.addSource(@intCast(@intFromEnum(key)), .constant, dtype, shape);
         }
     };
 }
 
-/// The typed, front-facing model-definition builder.
-pub fn DefinitionBuilder(comptime SourceKey: type, comptime limits: Limits) type {
-    const source_capacity = enumCapacity(SourceKey);
-    const DefinitionType = Definition(SourceKey, limits);
-    const ValueType = DefinitionType.ValueType;
-
-    return struct {
-        const Self = @This();
-        pub const Source = SourceKey;
-        pub const definition_limits = limits;
-        pub const DefinitionOutput = DefinitionType;
-        pub const TensorValue = ValueType;
-        pub const SourceOverride = DefinitionType.SourceOverride;
-        pub const ShiftBoundary = union(enum) {
-            wrap,
-            edge,
-            reflect,
-            constant: ValueType,
-        };
-        pub const SliceLoopIteration = Op.Compute.SliceLoopAttrs.Iteration;
-        pub const SliceLoopBoundary = Op.Compute.SliceLoopAttrs.Boundary;
-        pub const SliceLoopOptions = struct {
-            axis: i8,
-            iterations: []const SliceLoopIteration,
-        };
-
-        definition: DefinitionType = .{},
-        used_sources: [source_capacity]bool = @splat(false),
-
-        pub fn init() Self {
-            return .{};
-        }
-
-        pub fn input(self: *Self, comptime source_key: SourceKey, comptime dtype: Dtype, comptime shape: []const usize) ValueType {
-            return self.addSource(source_key, .input, dtype, shape);
-        }
-
-        pub fn parameter(
-            self: *Self,
-            comptime source_key: SourceKey,
-            comptime dtype: Dtype,
-            comptime shape: []const usize,
-        ) ValueType {
-            return self.addSource(source_key, .parameter, dtype, shape);
-        }
-
-        pub fn constant(
-            self: *Self,
-            comptime source_key: SourceKey,
-            comptime dtype: Dtype,
-            comptime shape: []const usize,
-        ) ValueType {
-            return self.addSource(source_key, .constant, dtype, shape);
-        }
-
-        pub fn scalar(self: *Self, comptime dtype: Dtype, comptime value: dtype.Scalar()) ValueType {
-            if (self.definition.tensor_count == limits.max_tensors) @compileError("definition exceeds max_tensors");
-            const tensor_id = self.definition.tensor_count;
-            const tensor_value: ValueType = .{
-                .id = tensor_id,
-                .dtype = dtype,
-                .shape = .init(&.{}),
-            };
-            self.definition.tensors[tensor_id] = .{
-                .value = tensor_value,
-                .origin = .{ .literal = ScalarValue.init(dtype, value) },
-            };
-            self.definition.tensor_count += 1;
-            return tensor_value;
-        }
-
-        pub fn full(
-            self: *Self,
-            comptime dtype: Dtype,
-            comptime extents: []const usize,
-            comptime value: dtype.Scalar(),
-        ) ValueType {
-            const scalar_value = self.scalar(dtype, value);
-            if (extents.len == 0) return scalar_value;
-            return self.broadcastTo(scalar_value, extents);
-        }
-
-        pub fn relu(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.relu, &.{tensor});
-        }
-
-        pub fn exp(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.exp, &.{tensor});
-        }
-
-        pub fn neg(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.neg, &.{tensor});
-        }
-
-        pub fn abs(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.abs, &.{tensor});
-        }
-
-        pub fn sqrt(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.sqrt, &.{tensor});
-        }
-
-        pub fn log(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.log, &.{tensor});
-        }
-
-        pub fn reciprocal(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.reciprocal, &.{tensor});
-        }
-
-        pub fn add(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.add, &.{ lhs, rhs });
-        }
-
-        pub fn sub(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.sub, &.{ lhs, rhs });
-        }
-
-        pub fn mul(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.mul, &.{ lhs, rhs });
-        }
-
-        pub fn div(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.div, &.{ lhs, rhs });
-        }
-
-        pub fn minimum(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.minimum, &.{ lhs, rhs });
-        }
-
-        pub fn maximum(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.maximum, &.{ lhs, rhs });
-        }
-
-        pub fn clamp(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime lower: ValueType,
-            comptime upper: ValueType,
-        ) ValueType {
-            return self.addCompute(.clamp, &.{ tensor, lower, upper });
-        }
-
-        pub fn equal(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.equal, &.{ lhs, rhs });
-        }
-
-        pub fn notEqual(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.not_equal, &.{ lhs, rhs });
-        }
-
-        pub fn lessThan(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.less_than, &.{ lhs, rhs });
-        }
-
-        pub fn lessEqual(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.less_equal, &.{ lhs, rhs });
-        }
-
-        pub fn greaterThan(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.greater_than, &.{ lhs, rhs });
-        }
-
-        pub fn greaterEqual(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.greater_equal, &.{ lhs, rhs });
-        }
-
-        pub fn logicalNot(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.logical_not, &.{tensor});
-        }
-
-        pub fn logicalAnd(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.logical_and, &.{ lhs, rhs });
-        }
-
-        pub fn logicalOr(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.logical_or, &.{ lhs, rhs });
-        }
-
-        pub fn where(
-            self: *Self,
-            comptime condition: ValueType,
-            comptime when_true: ValueType,
-            comptime when_false: ValueType,
-        ) ValueType {
-            return self.addCompute(.where, &.{ condition, when_true, when_false });
-        }
-
-        /// Materialize a tensor into fresh storage. Lowering may preserve a
-        /// useful physical layout while retaining the tensor's logical shape.
-        pub fn copy(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.copy, &.{tensor});
-        }
-
-        /// Materialize a tensor into fresh logical row-major storage.
-        pub fn contiguous(self: *Self, comptime tensor: ValueType) ValueType {
-            return self.addCompute(.contiguous, &.{tensor});
-        }
-
-        /// Materialize constant padding around every input axis.
-        pub fn pad(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime fill: ValueType,
-            comptime options: PadOptions,
-        ) ValueType {
-            return self.addCompute(.{ .pad = .{
-                .before = options.before,
-                .after = options.after,
-            } }, &.{ tensor, fill });
-        }
-
-        /// Materialize a translated tensor with one signed offset per axis.
-        /// Positive offsets move input values toward higher output coordinates.
-        pub fn shift(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime offsets: []const isize,
-            comptime boundary: ShiftBoundary,
-        ) ValueType {
-            const mode: Op.Compute.ShiftAttrs.Boundary = switch (boundary) {
-                .wrap => .wrap,
-                .edge => .edge,
-                .reflect => .reflect,
-                .constant => .constant,
-            };
-            const attrs: Op.Compute.ShiftAttrs = .{
-                .offsets = offsets,
-                .boundary = mode,
-            };
-            return switch (boundary) {
-                .constant => |fill| self.addCompute(.{ .shift = attrs }, &.{ tensor, fill }),
-                else => self.addCompute(.{ .shift = attrs }, &.{tensor}),
-            };
-        }
-
-        /// Apply one statically described transform per slice without
-        /// expanding the iterations into separate graph nodes.
-        pub fn sliceLoop(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime options: SliceLoopOptions,
-        ) ValueType {
-            const axis = normalizeAxis(tensor.shape.rank, options.axis);
-            return self.addCompute(.{ .slice_loop = .{
-                .axis = @intCast(axis),
-                .iterations = options.iterations,
-            } }, &.{tensor});
-        }
-
-        pub fn matmul(self: *Self, comptime lhs: ValueType, comptime rhs: ValueType) ValueType {
-            return self.addCompute(.matmul, &.{ lhs, rhs });
-        }
-
-        pub fn sum(self: *Self, comptime tensor: ValueType, comptime options: ReductionOptions) ValueType {
-            return self.addCompute(.{ .sum = reductionAttrs(tensor, options) }, &.{tensor});
-        }
-
-        pub fn mean(self: *Self, comptime tensor: ValueType, comptime options: ReductionOptions) ValueType {
-            return self.addCompute(.{ .mean = reductionAttrs(tensor, options) }, &.{tensor});
-        }
-
-        pub fn min(self: *Self, comptime tensor: ValueType, comptime options: ReductionOptions) ValueType {
-            return self.addCompute(.{ .min = reductionAttrs(tensor, options) }, &.{tensor});
-        }
-
-        pub fn max(self: *Self, comptime tensor: ValueType, comptime options: ReductionOptions) ValueType {
-            return self.addCompute(.{ .max = reductionAttrs(tensor, options) }, &.{tensor});
-        }
-
-        pub fn concat(
-            self: *Self,
-            comptime inputs: []const ValueType,
-            comptime axis: i8,
-        ) ValueType {
-            if (inputs.len == 0) @compileError("concat requires at least one input");
-            const normalized = normalizeAxis(inputs[0].shape.rank, axis);
-            return self.addCompute(.{ .concat = .{ .axis = @intCast(normalized) } }, inputs);
-        }
-
-        pub fn softmax(self: *Self, comptime tensor: ValueType, comptime axis: i8) ValueType {
-            return self.addCompute(.{ .softmax = .{ .axis = @intCast(normalizeAxis(tensor.shape.rank, axis)) } }, &.{tensor});
-        }
-
-        pub fn transpose(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime axis_a: i8,
-            comptime axis_b: i8,
-        ) ValueType {
-            const normalized_a = normalizeAxis(tensor.shape.rank, axis_a);
-            const normalized_b = normalizeAxis(tensor.shape.rank, axis_b);
-            var shape = tensor.shape;
-            std.mem.swap(usize, &shape.dims[normalized_a], &shape.dims[normalized_b]);
-            return self.addNode(
-                .{ .view = .{ .transpose = .{
-                    .axis_a = @intCast(normalized_a),
-                    .axis_b = @intCast(normalized_b),
-                } } },
-                &.{tensor},
-                tensor.dtype,
-                shape,
-            );
-        }
-
-        pub fn reshape(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime extents: []const usize,
-        ) ValueType {
-            if (extents.len > limits.max_rank) @compileError("reshape exceeds definition max_rank");
-            for (extents) |extent| {
-                if (extent == 0) @compileError("tensor dimensions must be greater than zero");
-            }
-            const shape = Tensor.Shape(limits.max_rank).init(extents);
-            if (shape.elementCount() != tensor.shape.elementCount()) {
-                @compileError("reshape must preserve the tensor element count");
-            }
-            return self.addNode(.{ .view = .reshape }, &.{tensor}, tensor.dtype, shape);
-        }
-
-        pub fn broadcastTo(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime extents: []const usize,
-        ) ValueType {
-            if (extents.len > limits.max_rank) @compileError("broadcast target exceeds definition max_rank");
-            if (tensor.shape.rank > extents.len) @compileError("broadcast target rank cannot be smaller than its source rank");
-            for (extents) |extent| {
-                if (extent == 0) @compileError("tensor dimensions must be greater than zero");
-            }
-            const rank_offset = extents.len - tensor.shape.rank;
-            for (tensor.shape.slice(), 0..) |source_extent, source_axis| {
-                const target_extent = extents[rank_offset + source_axis];
-                if (source_extent != 1 and source_extent != target_extent) {
-                    @compileError("broadcast source extent must equal its target or be one");
-                }
-            }
-            const shape = Tensor.Shape(limits.max_rank).init(extents);
-            return self.addNode(.{ .view = .broadcast }, &.{tensor}, tensor.dtype, shape);
-        }
-
-        pub fn flatten(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime options: FlattenOptions,
-        ) ValueType {
-            const start_axis = normalizeAxis(tensor.shape.rank, options.start_axis);
-            const end_axis = normalizeAxis(tensor.shape.rank, options.end_axis);
-            if (start_axis > end_axis) @compileError("flatten start_axis must not follow end_axis");
-
-            var shape = Tensor.Shape(limits.max_rank){ .rank = 0, .dims = @splat(0) };
-            for (tensor.shape.slice()[0..start_axis]) |extent| {
-                shape.dims[shape.rank] = extent;
-                shape.rank += 1;
-            }
-            var flattened_extent: usize = 1;
-            for (tensor.shape.slice()[start_axis .. end_axis + 1]) |extent| flattened_extent *= extent;
-            shape.dims[shape.rank] = flattened_extent;
-            shape.rank += 1;
-            for (tensor.shape.slice()[end_axis + 1 ..]) |extent| {
-                shape.dims[shape.rank] = extent;
-                shape.rank += 1;
-            }
-
-            return self.addNode(.{ .view = .{ .flatten = .{
-                .start_axis = @intCast(start_axis),
-                .end_axis = @intCast(end_axis),
-            } } }, &.{tensor}, tensor.dtype, shape);
-        }
-
-        pub fn squeeze(self: *Self, comptime tensor: ValueType, comptime axis: i8) ValueType {
-            const normalized = normalizeAxis(tensor.shape.rank, axis);
-            if (tensor.shape.at(normalized) != 1) @compileError("squeeze axis must have extent one");
-
-            var shape = tensor.shape;
-            var current = normalized;
-            while (current + 1 < shape.rank) : (current += 1) {
-                shape.dims[current] = shape.dims[current + 1];
-            }
-            shape.rank -= 1;
-            shape.dims[shape.rank] = 0;
-            return self.addNode(.{ .view = .{ .squeeze = .{ .axis = @intCast(normalized) } } }, &.{tensor}, tensor.dtype, shape);
-        }
-
-        pub fn unsqueeze(self: *Self, comptime tensor: ValueType, comptime axis: i8) ValueType {
-            if (tensor.shape.rank == limits.max_rank) @compileError("unsqueeze exceeds definition max_rank");
-            const normalized = normalizeInsertionAxis(tensor.shape.rank, axis);
-            var shape = tensor.shape;
-            var current = shape.rank;
-            while (current > normalized) : (current -= 1) {
-                shape.dims[current] = shape.dims[current - 1];
-            }
-            shape.dims[normalized] = 1;
-            shape.rank += 1;
-            return self.addNode(.{ .view = .{ .unsqueeze = .{ .axis = @intCast(normalized) } } }, &.{tensor}, tensor.dtype, shape);
-        }
-
-        pub fn permute(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime axes: []const i8,
-        ) ValueType {
-            if (axes.len != tensor.shape.rank) @compileError("permute requires one axis for every input dimension");
-            var current_axes: [limits.max_rank]usize = undefined;
-            var target_axes: [limits.max_rank]usize = undefined;
-            for (0..tensor.shape.rank) |axis| current_axes[axis] = axis;
-            for (axes, 0..) |axis, index| {
-                const normalized = normalizeAxis(tensor.shape.rank, axis);
-                for (target_axes[0..index]) |previous| {
-                    if (previous == normalized) @compileError("permute axes must be unique");
-                }
-                target_axes[index] = normalized;
-            }
-
-            var result = tensor;
-            for (target_axes[0..tensor.shape.rank], 0..) |target_axis, output_axis| {
-                var current_position = output_axis;
-                while (current_axes[current_position] != target_axis) : (current_position += 1) {}
-                if (current_position == output_axis) continue;
-                result = self.transpose(result, @intCast(output_axis), @intCast(current_position));
-                std.mem.swap(usize, &current_axes[output_axis], &current_axes[current_position]);
-            }
-            return result;
-        }
-
-        pub fn slice(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime options: SliceOptions,
-        ) ValueType {
-            const axis = normalizeAxis(tensor.shape.rank, options.axis);
-            const extent = tensor.shape.at(axis);
-            const end = options.end orelse extent;
-            if (options.step == 0) @compileError("slice step must be greater than zero");
-            if (options.start >= end or end > extent) {
-                @compileError("slice bounds must select a non-empty range within the axis");
-            }
-            const length = (end - options.start + options.step - 1) / options.step;
-            var shape = tensor.shape;
-            shape.dims[axis] = length;
-            return self.addNode(.{ .view = .{ .slice = .{
-                .axis = @intCast(axis),
-                .start = options.start,
-                .length = length,
-                .step = options.step,
-            } } }, &.{tensor}, tensor.dtype, shape);
-        }
-
-        /// Expose overlapping windows over the trailing input axes. Output
-        /// position axes retain their input positions and window axes append
-        /// to the result.
-        pub fn windows(
-            self: *Self,
-            comptime tensor: ValueType,
-            comptime options: WindowOptions,
-        ) ValueType {
-            const attrs: Op.View.WindowAttrs = .{
-                .sizes = options.sizes,
-                .strides = options.strides,
-                .dilations = options.dilations,
-            };
-            const shape = op_module.inferWindowsShape(&.{tensor}, attrs, limits.max_rank);
-            return self.addNode(.{ .view = .{ .windows = attrs } }, &.{tensor}, tensor.dtype, shape);
-        }
-
-        pub fn output(self: *Self, comptime value: ValueType) void {
-            if (self.definition.output_count == limits.max_outputs) {
-                @compileError("definition exceeds max_outputs");
-            }
-            self.definition.outputs[self.definition.output_count] = value.id;
-            self.definition.output_count += 1;
-        }
-
-        pub fn finish(self: *const Self) DefinitionType {
-            return self.definition;
-        }
-
-        fn addSource(
-            self: *Self,
-            comptime source_key: SourceKey,
-            comptime kind: Tensor.Source.Kind,
-            comptime dtype: Dtype,
-            comptime shape_extents: []const usize,
-        ) ValueType {
-            if (shape_extents.len > limits.max_rank) @compileError("source shape exceeds definition max_rank");
-            for (shape_extents) |extent| {
-                if (extent == 0) @compileError("tensor dimensions must be greater than zero");
-            }
-            if (self.definition.tensor_count == limits.max_tensors) @compileError("definition exceeds max_tensors");
-
-            const source_index: usize = @intCast(@intFromEnum(source_key));
-            if (self.used_sources[source_index]) @compileError("a source key may only be defined once");
-            self.used_sources[source_index] = true;
-
-            const id = self.definition.tensor_count;
-            const value: ValueType = .{
-                .id = id,
-                .dtype = dtype,
-                .shape = .init(shape_extents),
-            };
-            self.definition.tensors[id] = .{
-                .value = value,
-                .origin = .{ .source = source_index },
-                .source_kind = kind,
-            };
-            self.definition.tensor_count += 1;
-            return value;
-        }
-
-        fn addCompute(
-            self: *Self,
-            comptime compute: Op.Compute,
-            comptime inputs: []const ValueType,
-        ) ValueType {
-            const shape = compute.inferShape(inputs, limits.max_rank);
-            const dtype = compute.inferDtype(inputs);
-            return self.addNode(.{ .compute = compute }, inputs, dtype, shape);
-        }
-
-        fn addNode(
-            self: *Self,
-            comptime op: Op,
-            comptime inputs: []const ValueType,
-            comptime dtype: Dtype,
-            comptime shape: Tensor.Shape(limits.max_rank),
-        ) ValueType {
-            if (self.definition.node_count == limits.max_nodes) @compileError("definition exceeds max_nodes");
-            if (self.definition.tensor_count == limits.max_tensors) @compileError("definition exceeds max_tensors");
-            if (self.definition.input_ref_count + inputs.len > limits.max_input_refs) @compileError("definition exceeds max_input_refs");
-
-            const node_id = self.definition.node_count;
-            const tensor_id = self.definition.tensor_count;
-            const input_start = self.definition.input_ref_count;
-            for (inputs) |input_value| {
-                self.definition.input_refs[self.definition.input_ref_count] = input_value.id;
-                self.definition.input_ref_count += 1;
-            }
-            self.definition.nodes[node_id] = .{
-                .op = op,
-                .input_start = input_start,
-                .input_count = inputs.len,
-                .result = tensor_id,
-            };
-            const value: ValueType = .{ .id = tensor_id, .dtype = dtype, .shape = shape };
-            self.definition.tensors[tensor_id] = .{
-                .value = value,
-                .origin = .{ .node = node_id },
-            };
-            self.definition.node_count += 1;
-            self.definition.tensor_count += 1;
-            return value;
-        }
-
-        fn reductionAttrs(comptime tensor: ValueType, comptime options: ReductionOptions) Op.Compute.ReductionAttrs {
-            return .{
-                .axes = reductionAxesMask(tensor.shape.rank, options.axes),
-                .keep_dims = options.keep_dims,
-            };
-        }
-    };
+fn maximumInputRank(comptime inputs: []const Value) usize {
+    var result: usize = 0;
+    for (inputs) |input| result = @max(result, input.shape.rank);
+    return result;
+}
+
+fn maximumRank(comptime tensors: []const TensorRecord) usize {
+    var result: usize = 0;
+    for (tensors) |tensor| result = @max(result, tensor.value.shape.rank);
+    return result;
 }
 
 fn reductionAxesMask(comptime rank: usize, comptime axes: ?[]const i8) u64 {
@@ -740,13 +802,27 @@ fn normalizeInsertionAxis(comptime rank: usize, comptime requested_axis: i8) usi
     return @intCast(normalized);
 }
 
-fn enumCapacity(comptime Enum: type) usize {
+fn validateSourceKey(comptime Enum: type) void {
     const info = @typeInfo(Enum);
     if (info != .@"enum") @compileError("DefinitionBuilder source keys must be an enum type");
-    var capacity: usize = 0;
     for (info.@"enum".fields) |field| {
         if (field.value < 0) @compileError("source enum values must be non-negative");
-        capacity = @max(capacity, @as(usize, @intCast(field.value)) + 1);
     }
-    return capacity;
+}
+
+fn validateSources(comptime tensors: []const TensorRecord, comptime SourceKey: type) void {
+    const fields = @typeInfo(SourceKey).@"enum".fields;
+    for (tensors) |tensor| switch (tensor.origin) {
+        .source => |source_index| {
+            var found = false;
+            for (fields) |field| {
+                if (field.value == source_index) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) @compileError("definition contains a source outside its SourceKey enum");
+        },
+        .node, .literal => {},
+    };
 }

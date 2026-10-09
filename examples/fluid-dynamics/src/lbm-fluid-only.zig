@@ -20,15 +20,9 @@ const Sources = enum(usize) {
     weights,
 };
 
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 3,
-    .max_nodes = 192,
-    .max_tensors = 320,
-    .max_input_refs = 512,
-    .max_outputs = 1,
-});
+const Definition = zgc.DefinitionBuilder;
 
-const Value = Definition.TensorValue;
+const Value = zgc.Value;
 
 fn channel(b: *Definition, comptime tensor: Value, comptime index: usize) Value {
     return b.slice(tensor, .{ .axis = 2, .start = index, .end = index + 1 });
@@ -96,11 +90,12 @@ fn streamSolid(
 }
 
 fn define(b: *Definition) void {
-    const f = b.input(.f, .f32, &.{ H, W, 9 });
-    const omega = b.input(.omega, .f32, &.{1});
-    const cx = b.constant(.cx, .f32, &.{9});
-    const cy = b.constant(.cy, .f32, &.{9});
-    const weights = b.constant(.weights, .f32, &.{9});
+    const sources = b.sources(Sources);
+    const f = sources.input(.f, .f32, &.{ H, W, 9 });
+    const omega = sources.input(.omega, .f32, &.{1});
+    const cx = sources.constant(.cx, .f32, &.{9});
+    const cy = sources.constant(.cy, .f32, &.{9});
+    const weights = sources.constant(.weights, .f32, &.{9});
 
     const one = b.scalar(.f32, 1.0);
     const three = b.scalar(.f32, 3.0);

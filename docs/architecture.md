@@ -55,10 +55,16 @@ exported as public model-building APIs.
 
 ## Definition
 
-`DefinitionBuilder(SourceKey, limits)` is the typed front end. `SourceKey` must
-be an enum, giving every input, parameter, or constant a stable compile-time
-index. Its operation methods consume and return one concrete tensor-value type
-whose metadata contains an ID, dtype, and bounded shape.
+`DefinitionBuilder` is the front end. Its operation
+methods consume and return the concrete `Value` type, whose metadata contains
+an ID, dtype, and `BuildShape`. Build shapes retain their literal dimensions
+without imposing a maximum rank.
+
+Named sources are introduced through `builder.sources(SourceKey)`. `SourceKey`
+must be an enum, giving every input, parameter, or constant a stable
+compile-time index without specializing the builder itself. The builder records
+that type when the source facade is requested. Definitions without sources do
+not need to declare an empty source enum.
 
 The public definition representation lives in `frontend/`. Completed
 definitions cross into `compiler/`, where construction produces the semantic
@@ -79,12 +85,9 @@ The definition records:
 - inferred dtype and shape metadata;
 - graph outputs.
 
-Operation inputs are validated while operations are added. `finish()` returns
-the completed immutable definition value.
-
-Definition limits cover maximum rank, nodes, tensors, input
-references, and outputs. Defaults support small models; larger definitions can
-override individual fields. Exceeding a bound is a compile error.
+Operation inputs are validated while operations are added. `finish()`
+derives the exact node, tensor, input-reference, output, and maximum-rank
+capacities and returns the specialized immutable definition value.
 
 ## Construction and analysis
 

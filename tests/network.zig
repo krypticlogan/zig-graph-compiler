@@ -2,13 +2,7 @@ const std = @import("std");
 const zgc = @import("zgc");
 const nn = zgc.ext.nn;
 const Sources = enum(usize) { input, w1, b1, w2, b2 };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 6,
-    .max_tensors = 11,
-    .max_input_refs = 10,
-    .max_outputs = 1,
-});
+const Definition = zgc.DefinitionBuilder;
 const Dense = nn.Dense(Sources);
 const Classifier = nn.Sequential(&[_]Dense{
     .{
@@ -27,7 +21,8 @@ const Classifier = nn.Sequential(&[_]Dense{
 
 const definition = blk: {
     var builder = Definition.init();
-    const input = builder.input(.input, .f32, &.{ 2, 2 });
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.input, .f32, &.{ 2, 2 });
     builder.output(Classifier.apply(&builder, input));
     break :blk builder.finish();
 };
@@ -78,17 +73,12 @@ test "dense sequential model executes through core kernels" {
 
 test "dense output-input weights create an aliasing transpose" {
     const LayoutSources = enum(usize) { input, weights, bias };
-    const LayoutDefinition = zgc.DefinitionBuilder(LayoutSources, .{
-        .max_rank = 2,
-        .max_nodes = 3,
-        .max_tensors = 6,
-        .max_input_refs = 5,
-        .max_outputs = 1,
-    });
+    const LayoutDefinition = zgc.DefinitionBuilder;
     const OutputMajorDense = nn.Dense(LayoutSources);
     const layout_definition = comptime blk: {
         var builder = LayoutDefinition.init();
-        const input = builder.input(.input, .f32, &.{ 1, 3 });
+        const builder_sources = builder.sources(LayoutSources);
+        const input = builder_sources.input(.input, .f32, &.{ 1, 3 });
         const layer: OutputMajorDense = .{
             .weights = .weights,
             .bias = .bias,
@@ -104,7 +94,6 @@ test "dense output-input weights create an aliasing transpose" {
     try std.testing.expectEqualSlices(usize, &.{ 3, 2 }, graph.tensors[2].?.shape.slice());
     try std.testing.expectEqual(graph.tensors[1].?.storage_tensor, graph.tensors[2].?.storage_tensor);
 }
-
 
 const img = zgc.ext.img;
 test "image helpers declare channel-aware core inputs" {
@@ -124,14 +113,12 @@ test "image helpers declare channel-aware core inputs" {
     );
 
     const ImageSources = enum(usize) { image };
-    const ImageDefinition = zgc.DefinitionBuilder(ImageSources, .{
-        .max_rank = 4,
-        .max_outputs = 1,
-    });
+    const ImageDefinition = zgc.DefinitionBuilder;
     const image_definition = comptime blk: {
         var builder = ImageDefinition.init();
         const image = img.input(
             &builder,
+            ImageSources,
             .image,
             .f32,
             .{ .batch = 2, .height = 28, .width = 28, .channels = 3 },

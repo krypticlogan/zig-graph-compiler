@@ -6,18 +6,13 @@ const k = 64;
 const n = 64;
 
 const Sources = enum(usize) { input, weights };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 1,
-    .max_tensors = 3,
-    .max_input_refs = 2,
-    .max_outputs = 1,
-});
+const Definition = zgc.DefinitionBuilder;
 
 const definition = blk: {
     var builder = Definition.init();
-    const input = builder.input(.input, .f32, &.{ m, k });
-    const weights = builder.parameter(.weights, .f32, &.{ k, n });
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.input, .f32, &.{ m, k });
+    const weights = builder_sources.parameter(.weights, .f32, &.{ k, n });
     builder.output(builder.matmul(input, weights));
     break :blk builder.finish();
 };

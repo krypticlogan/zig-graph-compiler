@@ -19,13 +19,7 @@ pub const Sources = enum(usize) {
     b3,
 };
 
-pub const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 12,
-    .max_tensors = 19,
-    .max_input_refs = 18,
-    .max_outputs = 1,
-});
+pub const Definition = zgc.DefinitionBuilder;
 
 const Dense = zgc.ext.nn.Dense(Sources);
 
@@ -58,7 +52,7 @@ const Network = zgc.ext.nn.Sequential(&[_]Dense{
 fn defineGraph(builder: *Definition) void {
     // A runtime image flows through the composed layers to one probability
     // vector; Sequential contributes the intermediate graph nodes.
-    const input = builder.input(.input, .f32, &.{ batch_size, input_size });
+    const input = builder.sources(Sources).input(.input, .f32, &.{ batch_size, input_size });
     builder.output(Network.apply(builder, input));
 }
 

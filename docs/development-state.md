@@ -6,19 +6,23 @@ on Zig 0.16.0. The API should still be expected to change.
 
 ## Implementation roadmap
 
-1. Define first-class composite operations from primitives for LayerNorm,
-   activation functions, and domain extensions.
-2. Refine executable cost estimates and local pruning as additional kernel and
+
+1. Refine executable cost estimates and local pruning as additional kernel and
    representation alternatives are introduced.
-3. Add dtype conversion and settle the tensor-index dtype.
-4. Build argmin/argmax and runtime-indexed gather operations.
-5. Generalize matmul to broadcastable batch dimensions with compile-time
+2. Define first-class composite operations from primitives for LayerNorm,
+   activation functions, and domain extensions.
+3. Add cost and decision inspection to benchmarks
+4. Introduce composite operations as a first-class concern.
+4. Expand numerical validation and differential testing
+5. Add dtype conversion and settle the tensor-index dtype.
+6. Build argmin/argmax and runtime-indexed gather operations.
+7. Generalize matmul to broadcastable batch dimensions with compile-time
    traversal plans.
-6. Build convolution, pooling, and specialized stencil lowering over static
+8. Build convolution, pooling, and specialized stencil lowering over static
    padding and window geometry.
-7. Expand algebraic simplification, add common-subexpression elimination, and
+9. Expand algebraic simplification, add common-subexpression elimination, and
    generalize store/epilogue sinking beyond remap regions.
-8. Introduce explicitly bounded runtime extents where they preserve static
+10. Introduce explicitly bounded runtime extents where they preserve static
    kernel specialization and memory planning.
 
 ## Implemented

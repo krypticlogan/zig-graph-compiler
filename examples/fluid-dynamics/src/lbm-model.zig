@@ -56,15 +56,9 @@ const Sources = enum(usize) {
     smoke_weights,
 };
 
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 3,
-    .max_nodes = 320,
-    .max_tensors = 512,
-    .max_input_refs = 768,
-    .max_outputs = 6,
-});
+const Definition = zgc.DefinitionBuilder;
 
-const Value = Definition.TensorValue;
+const Value = zgc.Value;
 
 fn channel(
     b: *Definition,
@@ -205,56 +199,56 @@ fn streamSolid(
 }
 
 fn define(b: *Definition) void {
+    const sources = b.sources(Sources);
     // ---------------------------------------------------------------------
     // Sources
     // ---------------------------------------------------------------------
-
-    const f = b.input(.f, .f32, &.{ H, W, 9 });
-    const smoke_g = b.input(.smoke_g, .f32, &.{ H, W, 5 });
+    const f = sources.input(.f, .f32, &.{ H, W, 9 });
+    const smoke_g = sources.input(.smoke_g, .f32, &.{ H, W, 5 });
 
     // Amount of smoke concentration added during this step.
     // Usually zero everywhere except at emitter cells.
-    const smoke_injection = b.input(
+    const smoke_injection = sources.input(
         .smoke_injection,
         .f32,
         &.{ H, W, 1 },
     );
 
-    const force_x = b.input(.force_x, .f32, &.{ H, W, 1 });
-    const force_y = b.input(.force_y, .f32, &.{ H, W, 1 });
+    const force_x = sources.input(.force_x, .f32, &.{ H, W, 1 });
+    const force_y = sources.input(.force_y, .f32, &.{ H, W, 1 });
 
     // Fluid relaxation:
     //
     //   nu = cs^2 * (1 / omega - 1/2)
     //
     // for cs^2 = 1/3 in standard D2Q9 lattice units.
-    const omega = b.input(.omega, .f32, &.{1});
+    const omega = sources.input(.omega, .f32, &.{1});
 
     // Passive-scalar relaxation:
     //
     //   D = cs^2 * (1 / smoke_omega - 1/2)
     //
     // D2Q5 below also uses cs^2 = 1/3.
-    const smoke_omega = b.input(.smoke_omega, .f32, &.{1});
+    const smoke_omega = sources.input(.smoke_omega, .f32, &.{1});
 
     // 1.0 => no decay.
     // e.g. 0.997 => retain 99.7% of smoke each step.
-    const smoke_retention = b.input(.smoke_retention, .f32, &.{1});
+    const smoke_retention = sources.input(.smoke_retention, .f32, &.{1});
 
     // Fluid directions:
     //
     // cx = [ 0, 1, 0,-1, 0, 1,-1,-1, 1 ]
     // cy = [ 0, 0, 1, 0,-1, 1, 1,-1,-1 ]
-    const cx = b.constant(.cx, .f32, &.{9});
-    const cy = b.constant(.cy, .f32, &.{9});
+    const cx = sources.constant(.cx, .f32, &.{9});
+    const cy = sources.constant(.cy, .f32, &.{9});
 
     // Standard D2Q9 weights:
     // [4/9, 1/9,1/9,1/9,1/9, 1/36,1/36,1/36,1/36]
-    const fluid_weights = b.constant(.fluid_weights, .f32, &.{9});
+    const fluid_weights = sources.constant(.fluid_weights, .f32, &.{9});
 
     // D2Q5 passive-scalar weights:
     // [1/3, 1/6, 1/6, 1/6, 1/6]
-    const smoke_weights = b.constant(.smoke_weights, .f32, &.{5});
+    const smoke_weights = sources.constant(.smoke_weights, .f32, &.{5});
 
     // First five fluid directions are exactly the D2Q5 cardinal set.
     const smoke_cx = b.slice(cx, .{

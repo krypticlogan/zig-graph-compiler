@@ -6,17 +6,12 @@ const height = 88;
 const cell_count = width * height;
 
 const Sources = enum(usize) { world };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 4,
-    .max_nodes = 12,
-    .max_tensors = 18,
-    .max_input_refs = 24,
-    .max_outputs = 1,
-});
+const Definition = zgc.DefinitionBuilder;
 
 const Model = model: {
     var builder = Definition.init();
-    const world = builder.input(.world, .bool, &.{ height, width });
+    const builder_sources = builder.sources(Sources);
+    const world = builder_sources.input(.world, .bool, &.{ height, width });
     const dead = builder.scalar(.bool, false);
     const padded = builder.pad(world, dead, .{
         .before = &.{ 1, 1 },

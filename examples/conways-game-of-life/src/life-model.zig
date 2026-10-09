@@ -7,17 +7,12 @@ pub const cell_count = width * height;
 // The world is the model's only external source. Its fixed dimensions make the
 // entire neighborhood geometry available while the graph is being defined.
 const Sources = enum(usize) { world };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 4,
-    .max_nodes = 12,
-    .max_tensors = 18,
-    .max_input_refs = 24,
-    .max_outputs = 1,
-});
+const Definition = zgc.DefinitionBuilder;
 
 pub const Model = model: {
     var b = Definition.init();
-    const world = b.input(.world, .bool, &.{ height, width });
+    const b_sources = b.sources(Sources);
+    const world = b_sources.input(.world, .bool, &.{ height, width });
 
     // A dead-cell border gives every cell a complete 3x3 neighborhood without
     // requiring boundary checks in the generated computation.

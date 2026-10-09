@@ -23,17 +23,12 @@ test "copy materializes logical values from a strided view" {
 }
 
 const Sources = enum(usize) { input };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 2,
-    .max_tensors = 3,
-    .max_input_refs = 2,
-    .max_outputs = 1,
-});
+const Definition = zgc.DefinitionBuilder;
 
 const copy_model = model: {
     var builder = Definition.init();
-    const input = builder.input(.input, .f32, &.{ 2, 3 });
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.input, .f32, &.{ 2, 3 });
     builder.output(builder.copy(builder.transpose(input, 0, 1)));
     break :model builder.finish().model();
 };

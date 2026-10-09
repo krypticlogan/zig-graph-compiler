@@ -12,16 +12,11 @@ test "memory plan reuses an expired intermediate region" {
 
 test "persistent outputs retain distinct regions" {
     const Sources = enum(usize) { input };
-    const Definition = zgc.DefinitionBuilder(Sources, .{
-        .max_rank = 1,
-        .max_nodes = 2,
-        .max_tensors = 3,
-        .max_input_refs = 2,
-        .max_outputs = 2,
-    });
+    const Definition = zgc.DefinitionBuilder;
     const definition = comptime blk: {
         var builder = Definition.init();
-        const input = builder.input(.input, .f32, &.{4});
+        const builder_sources = builder.sources(Sources);
+        const input = builder_sources.input(.input, .f32, &.{4});
         builder.output(builder.relu(input));
         builder.output(builder.relu(input));
         break :blk builder.finish();
@@ -37,16 +32,11 @@ test "persistent outputs retain distinct regions" {
 
 test "memory plan splits and coalesces free spans" {
     const Sources = enum(usize) { input };
-    const Definition = zgc.DefinitionBuilder(Sources, .{
-        .max_rank = 1,
-        .max_nodes = 4,
-        .max_tensors = 5,
-        .max_input_refs = 4,
-        .max_outputs = 2,
-    });
+    const Definition = zgc.DefinitionBuilder;
     const definition = comptime blk: {
         var builder = Definition.init();
-        const input = builder.input(.input, .f32, &.{8});
+        const builder_sources = builder.sources(Sources);
+        const input = builder_sources.input(.input, .f32, &.{8});
         const wide_temporary = builder.copy(input);
         const scalar_temporary = builder.sum(wide_temporary, .{ .axes = &.{0} });
         builder.output(builder.relu(scalar_temporary));
@@ -67,17 +57,12 @@ test "memory plan splits and coalesces free spans" {
 
 test "memory plan grows when no free span fits" {
     const Sources = enum(usize) { small_input, large_input };
-    const Definition = zgc.DefinitionBuilder(Sources, .{
-        .max_rank = 1,
-        .max_nodes = 4,
-        .max_tensors = 6,
-        .max_input_refs = 4,
-        .max_outputs = 2,
-    });
+    const Definition = zgc.DefinitionBuilder;
     const definition = comptime blk: {
         var builder = Definition.init();
-        const small_input = builder.input(.small_input, .f32, &.{8});
-        const large_input = builder.input(.large_input, .f32, &.{10});
+        const builder_sources = builder.sources(Sources);
+        const small_input = builder_sources.input(.small_input, .f32, &.{8});
+        const large_input = builder_sources.input(.large_input, .f32, &.{10});
         const wide_temporary = builder.copy(small_input);
         const scalar_temporary = builder.sum(wide_temporary, .{ .axes = &.{0} });
         builder.output(builder.relu(scalar_temporary));
@@ -97,20 +82,15 @@ test "memory plan grows when no free span fits" {
 
 test "owned sources are reserved before reusable computed storage" {
     const Sources = enum(usize) { input, bias };
-    const Definition = zgc.DefinitionBuilder(Sources, .{
-        .max_rank = 1,
-        .max_nodes = 4,
-        .max_tensors = 6,
-        .max_input_refs = 5,
-        .max_outputs = 1,
-    });
+    const Definition = zgc.DefinitionBuilder;
     const definition = comptime blk: {
         var builder = Definition.init();
-        const input = builder.input(.input, .f32, &.{8});
+        const builder_sources = builder.sources(Sources);
+        const input = builder_sources.input(.input, .f32, &.{8});
         const wide_temporary = builder.copy(input);
         const reduced = builder.sum(wide_temporary, .{ .axes = &.{0} });
         const narrow_temporary = builder.relu(reduced);
-        const late_bias = builder.parameter(.bias, .f32, &.{1});
+        const late_bias = builder_sources.parameter(.bias, .f32, &.{1});
         builder.output(builder.add(narrow_temporary, late_bias));
         break :blk builder.finish();
     };

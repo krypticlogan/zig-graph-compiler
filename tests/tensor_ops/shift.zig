@@ -2,18 +2,13 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { input, fill };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 5,
-    .max_tensors = 7,
-    .max_input_refs = 6,
-    .max_outputs = 5,
-});
+const Definition = zgc.DefinitionBuilder;
 
 const boundary_model = model: {
     var b = Definition.init();
-    const input = b.input(.input, .f32, &.{ 2, 3 });
-    const fill = b.input(.fill, .f32, &.{});
+    const b_sources = b.sources(Sources);
+    const input = b_sources.input(.input, .f32, &.{ 2, 3 });
+    const fill = b_sources.input(.fill, .f32, &.{});
     b.output(b.shift(input, &.{ 1, -1 }, .wrap));
     b.output(b.shift(input, &.{ 1, -1 }, .edge));
     b.output(b.shift(input, &.{ 1, -1 }, .reflect));
@@ -44,17 +39,13 @@ test "shift maps positive and negative offsets across every boundary mode" {
     try std.testing.expectEqualSlices(f32, &.{ 7, 7, 7, 2, 3, 7 }, model.outputView(3).contiguousSlice().?);
 }
 
-const LoopDefinition = zgc.DefinitionBuilder(enum(usize) { input }, .{
-    .max_rank = 3,
-    .max_nodes = 2,
-    .max_tensors = 4,
-    .max_input_refs = 3,
-    .max_outputs = 1,
-});
+const LoopDefinitionSources = enum(usize) { input };
+const LoopDefinition = zgc.DefinitionBuilder;
 
 const loop_model = model: {
     var b = LoopDefinition.init();
-    const input = b.input(.input, .f32, &.{ 2, 3, 9 });
+    const b_sources = b.sources(LoopDefinitionSources);
+    const input = b_sources.input(.input, .f32, &.{ 2, 3, 9 });
     const mapped = b.add(input, b.scalar(.f32, 1));
     b.output(b.sliceLoop(mapped, .{
         .axis = 2,
@@ -99,17 +90,13 @@ test "slice loop fuses a vectorized producer and redirects boundary channels" {
     try std.testing.expectEqualSlices(f32, &expected, model.outputView(0).contiguousSlice().?);
 }
 
-const InferredLoopDefinition = zgc.DefinitionBuilder(enum(usize) { input }, .{
-    .max_rank = 3,
-    .max_nodes = 6,
-    .max_tensors = 8,
-    .max_input_refs = 8,
-    .max_outputs = 1,
-});
+const InferredLoopDefinitionSources = enum(usize) { input };
+const InferredLoopDefinition = zgc.DefinitionBuilder;
 
 const inferred_loop_model = model: {
     var b = InferredLoopDefinition.init();
-    const input = b.input(.input, .f32, &.{ 2, 3, 2 });
+    const b_sources = b.sources(InferredLoopDefinitionSources);
+    const input = b_sources.input(.input, .f32, &.{ 2, 3, 2 });
     const mapped = b.add(input, b.scalar(.f32, 1));
     const left = b.slice(mapped, .{ .axis = 2, .start = 0, .end = 1 });
     const right = b.slice(mapped, .{ .axis = 2, .start = 1, .end = 2 });
@@ -145,17 +132,13 @@ test "slice shift concat remaps infer a loop plan" {
     );
 }
 
-const StridedDefinition = zgc.DefinitionBuilder(enum(usize) { input }, .{
-    .max_rank = 2,
-    .max_nodes = 2,
-    .max_tensors = 3,
-    .max_input_refs = 2,
-    .max_outputs = 1,
-});
+const StridedDefinitionSources = enum(usize) { input };
+const StridedDefinition = zgc.DefinitionBuilder;
 
 const strided_model = model: {
     var b = StridedDefinition.init();
-    const input = b.input(.input, .f32, &.{ 2, 3 });
+    const b_sources = b.sources(StridedDefinitionSources);
+    const input = b_sources.input(.input, .f32, &.{ 2, 3 });
     const transposed = b.transpose(input, 0, 1);
     b.output(b.shift(transposed, &.{ 0, 1 }, .wrap));
     break :model b.finish().model();
@@ -168,17 +151,13 @@ test "shift reads a strided source view in logical coordinates" {
     try std.testing.expectEqualSlices(f32, &.{ 4, 1, 5, 2, 6, 3 }, model.outputView(0).contiguousSlice().?);
 }
 
-const SingletonDefinition = zgc.DefinitionBuilder(enum(usize) { input }, .{
-    .max_rank = 1,
-    .max_nodes = 1,
-    .max_tensors = 2,
-    .max_input_refs = 1,
-    .max_outputs = 1,
-});
+const SingletonDefinitionSources = enum(usize) { input };
+const SingletonDefinition = zgc.DefinitionBuilder;
 
 const singleton_model = model: {
     var b = SingletonDefinition.init();
-    const input = b.input(.input, .i8, &.{1});
+    const b_sources = b.sources(SingletonDefinitionSources);
+    const input = b_sources.input(.input, .i8, &.{1});
     b.output(b.shift(input, &.{101}, .reflect));
     break :model b.finish().model();
 };

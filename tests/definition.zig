@@ -2,18 +2,32 @@ const std = @import("std");
 const zgc = @import("zgc");
 
 const Sources = enum(usize) { lhs, rhs, auxiliary };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 4,
-    .max_nodes = 6,
-    .max_tensors = 8,
-    .max_input_refs = 8,
-    .max_outputs = 2,
-});
+const Definition = zgc.DefinitionBuilder;
+
+test "concrete builder derives finished definition storage and rank" {
+    const LocalSources = enum(usize) { input };
+    const definition = comptime blk: {
+        var builder = zgc.DefinitionBuilder.init();
+        const sources = builder.sources(LocalSources);
+        const input = sources.input(.input, .f32, &.{ 1, 1, 1, 1, 1, 1, 1, 1, 2 });
+        builder.output(input);
+        break :blk builder.finish();
+    };
+
+    try std.testing.expect(@TypeOf(zgc.DefinitionBuilder.init()) == zgc.DefinitionBuilder);
+    try std.testing.expect(@TypeOf(definition).Source == LocalSources);
+    try std.testing.expectEqual(@as(usize, 9), @TypeOf(definition).max_rank);
+    try std.testing.expectEqual(@as(usize, 0), definition.nodes.len);
+    try std.testing.expectEqual(@as(usize, 1), definition.tensors.len);
+    try std.testing.expectEqual(@as(usize, 1), definition.outputs.len);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1, 1, 1, 1, 1, 2 }, definition.tensors[0].value.shape.slice());
+}
 
 const matmul_model = model: {
     var builder = Definition.init();
-    const lhs = builder.parameter(.lhs, .f32, &.{ 3, 4 });
-    const rhs = builder.parameter(.rhs, .f32, &.{ 4, 7 });
+    const builder_sources = builder.sources(Sources);
+    const lhs = builder_sources.parameter(.lhs, .f32, &.{ 3, 4 });
+    const rhs = builder_sources.parameter(.rhs, .f32, &.{ 4, 7 });
     builder.output(builder.relu(builder.matmul(lhs, rhs)));
     break :model builder.finish().model();
 };
@@ -49,9 +63,10 @@ test "definition counting and lowering preserve exact graph contracts" {
 const batch_model = model: {
     const batch = std.simd.suggestVectorLength(f32) orelse 4;
     var builder = Definition.init();
-    const input = builder.input(.lhs, .f32, &.{ batch, 4 });
-    const weights = builder.parameter(.rhs, .f32, &.{ 4, 3 });
-    const bias = builder.parameter(.auxiliary, .f32, &.{3});
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.lhs, .f32, &.{ batch, 4 });
+    const weights = builder_sources.parameter(.rhs, .f32, &.{ 4, 3 });
+    const bias = builder_sources.parameter(.auxiliary, .f32, &.{3});
     builder.output(builder.relu(builder.add(builder.matmul(input, weights), bias)));
     break :model builder.finish().model();
 };
@@ -70,9 +85,10 @@ test "lowering fixes batch-oriented layouts and matmul strategy" {
 
 const fusion_candidate_model = model: {
     var builder = Definition.init();
-    const a = builder.input(.lhs, .f32, &.{4});
-    const b = builder.input(.rhs, .f32, &.{4});
-    const c = builder.input(.auxiliary, .f32, &.{4});
+    const builder_sources = builder.sources(Sources);
+    const a = builder_sources.input(.lhs, .f32, &.{4});
+    const b = builder_sources.input(.rhs, .f32, &.{4});
+    const c = builder_sources.input(.auxiliary, .f32, &.{4});
     builder.output(builder.add(builder.mul(a, b), c));
     break :model builder.finish().model();
 };
@@ -89,8 +105,9 @@ test "semantic analysis records tensor uses and outputs" {
 
 const reduction_model = model: {
     var builder = Definition.init();
-    const input = builder.input(.lhs, .f32, &.{ 2, 3, 4, 5 });
-    const bias = builder.parameter(.rhs, .f32, &.{ 1, 4, 1 });
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.lhs, .f32, &.{ 2, 3, 4, 5 });
+    const bias = builder_sources.parameter(.rhs, .f32, &.{ 1, 4, 1 });
     const biased = builder.add(input, bias);
     builder.output(builder.mean(biased, .{ .axes = &.{ -3, -2 }, .keep_dims = true }));
     builder.output(builder.max(input, zgc.ReductionOptions{}));
@@ -110,7 +127,8 @@ test "broadcasting and reductions normalize compile-time geometry" {
 
 const structural_model = model: {
     var builder = Definition.init();
-    const input = builder.input(.lhs, .f32, &.{ 2, 1, 3, 4 });
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.lhs, .f32, &.{ 2, 1, 3, 4 });
     const squeezed = builder.squeeze(input, 1);
     const flattened = builder.flatten(squeezed, .{ .start_axis = 1 });
     const expanded = builder.unsqueeze(flattened, -1);
@@ -141,6 +159,7 @@ test "scalar and full definitions retain immutable literal geometry" {
     };
 
     try std.testing.expectEqualSlices(usize, &.{}, definition.tensors[0].value.shape.slice());
+    try std.testing.expectEqual(@as(usize, 0), @typeInfo(@TypeOf(definition).Source).@"enum".fields.len);
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, definition.tensors[2].value.shape.slice());
     switch (definition.tensors[0].origin) {
         .literal => |value| try std.testing.expectEqual(@as(f32, 2.5), value.get(.f32)),
@@ -155,7 +174,8 @@ test "scalar and full definitions retain immutable literal geometry" {
 
 const predicate_model = model: {
     var builder = Definition.init();
-    const input = builder.input(.lhs, .f32, &.{ 2, 3 });
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.lhs, .f32, &.{ 2, 3 });
     const threshold = builder.scalar(.f32, 0);
     const condition = builder.greaterThan(input, threshold);
     const fallback = builder.full(.f32, &.{ 1, 3 }, -1);
@@ -183,16 +203,12 @@ test "comparisons and selection carry explicit boolean dtype through lowering" {
 }
 
 test "primitive builders infer every math and predicate operation without model generation" {
-    const PrimitiveDefinition = zgc.DefinitionBuilder(enum(usize) { input }, .{
-        .max_rank = 2,
-        .max_nodes = 24,
-        .max_tensors = 28,
-        .max_input_refs = 40,
-        .max_outputs = 1,
-    });
+    const PrimitiveDefinitionSources = enum(usize) { input };
+    const PrimitiveDefinition = zgc.DefinitionBuilder;
     const definition = comptime blk: {
         var builder = PrimitiveDefinition.init();
-        const input = builder.input(.input, .f32, &.{ 2, 3 });
+        const builder_sources = builder.sources(PrimitiveDefinitionSources);
+        const input = builder_sources.input(.input, .f32, &.{ 2, 3 });
         const lower = builder.scalar(.f32, -1);
         const upper = builder.scalar(.f32, 1);
         const negated = builder.neg(input);

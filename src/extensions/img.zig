@@ -1,4 +1,6 @@
 const Dtype = @import("../zgc/storage/dtype.zig").Dtype;
+const DefinitionBuilder = @import("../zgc/frontend/definition.zig").DefinitionBuilder;
+const Value = @import("../zgc/frontend/definition.zig").Value;
 
 pub const Layout = enum {
     channels_last,
@@ -39,11 +41,12 @@ pub const Dimensions = struct {
 
 /// Declares a rank-4 image input using the selected channel convention.
 pub fn input(
-    builder: anytype,
-    comptime source_key: @TypeOf(builder.*).Source,
+    builder: *DefinitionBuilder,
+    comptime SourceKey: type,
+    comptime source_key: SourceKey,
     comptime dtype: Dtype,
     comptime dimensions: Dimensions,
-) @TypeOf(builder.*).TensorValue {
+) Value {
     const image_shape = dimensions.shape();
-    return builder.input(source_key, dtype, &image_shape);
+    return builder.sources(SourceKey).input(source_key, dtype, &image_shape);
 }

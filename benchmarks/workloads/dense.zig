@@ -9,21 +9,16 @@ const parameter_total = input_width * hidden_width + hidden_width +
     hidden_width * output_width + output_width;
 
 const Sources = enum(usize) { input, w1, b1, w2, b2 };
-const Definition = zgc.DefinitionBuilder(Sources, .{
-    .max_rank = 2,
-    .max_nodes = 6,
-    .max_tensors = 16,
-    .max_input_refs = 12,
-    .max_outputs = 1,
-});
+const Definition = zgc.DefinitionBuilder;
 
 const definition = blk: {
     var builder = Definition.init();
-    const input = builder.input(.input, .f32, &.{ batch_size, input_width });
-    const w1 = builder.parameter(.w1, .f32, &.{ input_width, hidden_width });
-    const b1 = builder.parameter(.b1, .f32, &.{hidden_width});
-    const w2 = builder.parameter(.w2, .f32, &.{ hidden_width, output_width });
-    const b2 = builder.parameter(.b2, .f32, &.{output_width});
+    const builder_sources = builder.sources(Sources);
+    const input = builder_sources.input(.input, .f32, &.{ batch_size, input_width });
+    const w1 = builder_sources.parameter(.w1, .f32, &.{ input_width, hidden_width });
+    const b1 = builder_sources.parameter(.b1, .f32, &.{hidden_width});
+    const w2 = builder_sources.parameter(.w2, .f32, &.{ hidden_width, output_width });
+    const b2 = builder_sources.parameter(.b2, .f32, &.{output_width});
     const hidden = builder.relu(builder.add(builder.matmul(input, w1), b1));
     builder.output(builder.softmax(builder.add(builder.matmul(hidden, w2), b2), 1));
     break :blk builder.finish();
