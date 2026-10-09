@@ -60,6 +60,37 @@ const Definition = zgc.DefinitionBuilder;
 
 const Value = zgc.Value;
 
+fn equilibriumPolynomial(
+    comptime eu: zgc.Expr,
+    comptime velocity_sq: zgc.Expr,
+    comptime one: zgc.Expr,
+    comptime three: zgc.Expr,
+    comptime four_point_five: zgc.Expr,
+    comptime one_point_five: zgc.Expr,
+) zgc.Expr {
+    const linear = three.mul(eu);
+    const eu_sq = eu.mul(eu);
+    const quadratic = four_point_five.mul(eu_sq);
+    const speed_correction = one_point_five.mul(velocity_sq);
+    return one.add(linear).add(quadratic).sub(speed_correction);
+}
+
+fn passiveScalarPolynomial(
+    comptime eu: zgc.Expr,
+    comptime one: zgc.Expr,
+    comptime three: zgc.Expr,
+) zgc.Expr {
+    return one.add(three.mul(eu));
+}
+
+fn bgkCollision(
+    comptime populations: zgc.Expr,
+    comptime equilibrium: zgc.Expr,
+    comptime omega: zgc.Expr,
+) zgc.Expr {
+    return populations.add(omega.mul(equilibrium.sub(populations)));
+}
+
 fn channel(
     b: *Definition,
     comptime x: Value,
@@ -203,61 +234,61 @@ fn define(b: *Definition) void {
     // ---------------------------------------------------------------------
     // Sources
     // ---------------------------------------------------------------------
-    const f = sources.input(.f, .f32, &.{ H, W, 9 });
-    const smoke_g = sources.input(.smoke_g, .f32, &.{ H, W, 5 });
+    const f = b.expr(sources.input(.f, .f32, &.{ H, W, 9 }));
+    const smoke_g = b.expr(sources.input(.smoke_g, .f32, &.{ H, W, 5 }));
 
     // Amount of smoke concentration added during this step.
     // Usually zero everywhere except at emitter cells.
-    const smoke_injection = sources.input(
+    const smoke_injection = b.expr(sources.input(
         .smoke_injection,
         .f32,
         &.{ H, W, 1 },
-    );
+    ));
 
-    const force_x = sources.input(.force_x, .f32, &.{ H, W, 1 });
-    const force_y = sources.input(.force_y, .f32, &.{ H, W, 1 });
+    const force_x = b.expr(sources.input(.force_x, .f32, &.{ H, W, 1 }));
+    const force_y = b.expr(sources.input(.force_y, .f32, &.{ H, W, 1 }));
 
     // Fluid relaxation:
     //
     //   nu = cs^2 * (1 / omega - 1/2)
     //
     // for cs^2 = 1/3 in standard D2Q9 lattice units.
-    const omega = sources.input(.omega, .f32, &.{1});
+    const omega = b.expr(sources.input(.omega, .f32, &.{1}));
 
     // Passive-scalar relaxation:
     //
     //   D = cs^2 * (1 / smoke_omega - 1/2)
     //
     // D2Q5 below also uses cs^2 = 1/3.
-    const smoke_omega = sources.input(.smoke_omega, .f32, &.{1});
+    const smoke_omega = b.expr(sources.input(.smoke_omega, .f32, &.{1}));
 
     // 1.0 => no decay.
     // e.g. 0.997 => retain 99.7% of smoke each step.
-    const smoke_retention = sources.input(.smoke_retention, .f32, &.{1});
+    const smoke_retention = b.expr(sources.input(.smoke_retention, .f32, &.{1}));
 
     // Fluid directions:
     //
     // cx = [ 0, 1, 0,-1, 0, 1,-1,-1, 1 ]
     // cy = [ 0, 0, 1, 0,-1, 1, 1,-1,-1 ]
-    const cx = sources.constant(.cx, .f32, &.{9});
-    const cy = sources.constant(.cy, .f32, &.{9});
+    const cx = b.expr(sources.constant(.cx, .f32, &.{9}));
+    const cy = b.expr(sources.constant(.cy, .f32, &.{9}));
 
     // Standard D2Q9 weights:
     // [4/9, 1/9,1/9,1/9,1/9, 1/36,1/36,1/36,1/36]
-    const fluid_weights = sources.constant(.fluid_weights, .f32, &.{9});
+    const fluid_weights = b.expr(sources.constant(.fluid_weights, .f32, &.{9}));
 
     // D2Q5 passive-scalar weights:
     // [1/3, 1/6, 1/6, 1/6, 1/6]
-    const smoke_weights = sources.constant(.smoke_weights, .f32, &.{5});
+    const smoke_weights = b.expr(sources.constant(.smoke_weights, .f32, &.{5}));
 
     // First five fluid directions are exactly the D2Q5 cardinal set.
-    const smoke_cx = b.slice(cx, .{
+    const smoke_cx = cx.slice(.{
         .axis = 0,
         .start = 0,
         .end = 5,
     });
 
-    const smoke_cy = b.slice(cy, .{
+    const smoke_cy = cy.slice(.{
         .axis = 0,
         .start = 0,
         .end = 5,
@@ -267,17 +298,17 @@ fn define(b: *Definition) void {
     // Scalars
     // ---------------------------------------------------------------------
 
-    const one = b.scalar(.f32, 1.0);
-    const three = b.scalar(.f32, 3.0);
-    const four_point_five = b.scalar(.f32, 4.5);
-    const one_point_five = b.scalar(.f32, 1.5);
+    const one = b.expr(b.scalar(.f32, 1.0));
+    const three = b.expr(b.scalar(.f32, 3.0));
+    const four_point_five = b.expr(b.scalar(.f32, 4.5));
+    const one_point_five = b.expr(b.scalar(.f32, 1.5));
 
     // =====================================================================
     // FLUID: MACROSCOPIC DENSITY
     // =====================================================================
 
     // rho = sum_i f_i
-    const rho = b.sum(f, .{
+    const rho = f.sum(.{
         .axes = &.{2},
         .keep_dims = true,
     });
@@ -286,95 +317,67 @@ fn define(b: *Definition) void {
     // FLUID: MACROSCOPIC VELOCITY
     // =====================================================================
 
-    const momentum_x = b.sum(
-        b.mul(f, cx),
-        .{
-            .axes = &.{2},
-            .keep_dims = true,
-        },
-    );
+    const momentum_x = f.mul(cx).sum(.{
+        .axes = &.{2},
+        .keep_dims = true,
+    });
 
-    const momentum_y = b.sum(
-        b.mul(f, cy),
-        .{
-            .axes = &.{2},
-            .keep_dims = true,
-        },
-    );
+    const momentum_y = f.mul(cy).sum(.{
+        .axes = &.{2},
+        .keep_dims = true,
+    });
 
-    const ux = b.div(momentum_x, rho);
-    const uy = b.div(momentum_y, rho);
+    const ux = momentum_x.div(rho);
+    const uy = momentum_y.div(rho);
 
     // Apply caller-controlled momentum injection to the equilibrium velocity.
-    const collision_ux = b.add(
-        ux,
-        b.div(force_x, rho),
-    );
+    const collision_ux = ux.add(force_x.div(rho));
+    const collision_uy = uy.add(force_y.div(rho));
 
-    const collision_uy = b.add(
-        uy,
-        b.div(force_y, rho),
-    );
-
-    const ux_sq = b.mul(collision_ux, collision_ux);
-    const uy_sq = b.mul(collision_uy, collision_uy);
-    const velocity_sq = b.add(ux_sq, uy_sq);
+    const ux_sq = collision_ux.mul(collision_ux);
+    const uy_sq = collision_uy.mul(collision_uy);
+    const velocity_sq = ux_sq.add(uy_sq);
 
     // =====================================================================
     // FLUID: D2Q9 EQUILIBRIUM
     // =====================================================================
 
-    const fluid_eu = b.add(
-        b.mul(collision_ux, cx),
-        b.mul(collision_uy, cy),
-    );
-
-    const fluid_eu_sq = b.mul(fluid_eu, fluid_eu);
+    const fluid_eu_x = collision_ux.mul(cx);
+    const fluid_eu_y = collision_uy.mul(cy);
+    const fluid_eu = fluid_eu_x.add(fluid_eu_y);
 
     // f_eq_i =
     //   w_i rho [1 + 3 e_i.u + 4.5(e_i.u)^2 - 1.5|u|^2]
-    const fluid_equilibrium_poly = b.sub(
-        b.add(
-            b.add(
-                one,
-                b.mul(three, fluid_eu),
-            ),
-            b.mul(four_point_five, fluid_eu_sq),
-        ),
-        b.mul(one_point_five, velocity_sq),
-    );
+    const fluid_equilibrium_poly = fluid_eu.apply(equilibriumPolynomial, .{
+        velocity_sq,
+        one,
+        three,
+        four_point_five,
+        one_point_five,
+    });
 
-    const f_eq = b.mul(
-        b.mul(rho, fluid_weights),
-        fluid_equilibrium_poly,
-    );
+    const f_eq = rho.mul(fluid_weights).mul(fluid_equilibrium_poly);
 
     // =====================================================================
     // FLUID: BGK COLLISION
     // =====================================================================
 
     // f* = f + omega(f_eq - f)
-    const post_collision = b.add(
-        f,
-        b.mul(
-            omega,
-            b.sub(f_eq, f),
-        ),
-    );
+    const post_collision = f.apply(bgkCollision, .{ f_eq, omega });
 
     // =====================================================================
     // FLUID: STREAMING + DOMAIN-WALL BOUNCE-BACK
     // =====================================================================
 
-    const f0 = channel(b, post_collision, 0);
-    const f1 = channel(b, post_collision, 1);
-    const f2 = channel(b, post_collision, 2);
-    const f3 = channel(b, post_collision, 3);
-    const f4 = channel(b, post_collision, 4);
-    const f5 = channel(b, post_collision, 5);
-    const f6 = channel(b, post_collision, 6);
-    const f7 = channel(b, post_collision, 7);
-    const f8 = channel(b, post_collision, 8);
+    const f0 = channel(b, post_collision.value, 0);
+    const f1 = channel(b, post_collision.value, 1);
+    const f2 = channel(b, post_collision.value, 2);
+    const f3 = channel(b, post_collision.value, 3);
+    const f4 = channel(b, post_collision.value, 4);
+    const f5 = channel(b, post_collision.value, 5);
+    const f6 = channel(b, post_collision.value, 6);
+    const f7 = channel(b, post_collision.value, 7);
+    const f8 = channel(b, post_collision.value, 8);
 
     const s0 = f0;
     const s1 = streamSolid(b, f1, f3, 1, 0);
@@ -397,27 +400,21 @@ fn define(b: *Definition) void {
 
     // Decay every population uniformly so total smoke concentration decays
     // by smoke_retention as well.
-    const smoke_retained = b.mul(
-        smoke_g,
-        smoke_retention,
-    );
+    const smoke_retained = smoke_g.mul(smoke_retention);
 
     // Inject source mass into the rest population. This adds smoke exactly,
     // independently of smoke_omega, before collision redistributes it.
-    const g0_retained = channel(b, smoke_retained, 0);
-    const g1_retained = channel(b, smoke_retained, 1);
-    const g2_retained = channel(b, smoke_retained, 2);
-    const g3_retained = channel(b, smoke_retained, 3);
-    const g4_retained = channel(b, smoke_retained, 4);
+    const g0_retained = b.expr(channel(b, smoke_retained.value, 0));
+    const g1_retained = channel(b, smoke_retained.value, 1);
+    const g2_retained = channel(b, smoke_retained.value, 2);
+    const g3_retained = channel(b, smoke_retained.value, 3);
+    const g4_retained = channel(b, smoke_retained.value, 4);
 
-    const g0_injected = b.add(
-        g0_retained,
-        smoke_injection,
-    );
+    const g0_injected = g0_retained.add(smoke_injection);
 
     const smoke_pre_collision_g = b.concat(
         &.{
-            g0_injected,
+            g0_injected.value,
             g1_retained,
             g2_retained,
             g3_retained,
@@ -429,7 +426,7 @@ fn define(b: *Definition) void {
     // Scalar concentration:
     //
     // smoke = sum_i g_i
-    const smoke = b.sum(smoke_pre_collision_g, .{
+    const smoke = b.expr(smoke_pre_collision_g).sum(.{
         .axes = &.{2},
         .keep_dims = true,
     });
@@ -443,46 +440,33 @@ fn define(b: *Definition) void {
     // g_eq_i = w_i * smoke * [1 + 3(e_i.u)]
     //
     // The fluid velocity is not changed by the passive scalar here.
-    const smoke_eu = b.add(
-        b.mul(collision_ux, smoke_cx),
-        b.mul(collision_uy, smoke_cy),
-    );
+    const smoke_eu_x = collision_ux.mul(smoke_cx);
+    const smoke_eu_y = collision_uy.mul(smoke_cy);
+    const smoke_eu = smoke_eu_x.add(smoke_eu_y);
 
-    const smoke_equilibrium_poly = b.add(
-        one,
-        b.mul(three, smoke_eu),
-    );
+    const smoke_equilibrium_poly = smoke_eu.apply(passiveScalarPolynomial, .{ one, three });
 
-    const smoke_eq = b.mul(
-        b.mul(smoke, smoke_weights),
-        smoke_equilibrium_poly,
-    );
+    const smoke_eq = smoke.mul(smoke_weights).mul(smoke_equilibrium_poly);
 
     // =====================================================================
     // SMOKE: BGK COLLISION
     // =====================================================================
 
     // g* = g + omega_s(g_eq - g)
-    const smoke_post_collision = b.add(
-        smoke_pre_collision_g,
-        b.mul(
-            smoke_omega,
-            b.sub(
-                smoke_eq,
-                smoke_pre_collision_g,
-            ),
-        ),
-    );
+    const smoke_post_collision = b.expr(smoke_pre_collision_g).apply(bgkCollision, .{
+        smoke_eq,
+        smoke_omega,
+    });
 
     // =====================================================================
     // SMOKE: STREAMING + NO-FLUX DOMAIN WALLS
     // =====================================================================
 
-    const g0 = channel(b, smoke_post_collision, 0);
-    const g1 = channel(b, smoke_post_collision, 1);
-    const g2 = channel(b, smoke_post_collision, 2);
-    const g3 = channel(b, smoke_post_collision, 3);
-    const g4 = channel(b, smoke_post_collision, 4);
+    const g0 = channel(b, smoke_post_collision.value, 0);
+    const g1 = channel(b, smoke_post_collision.value, 1);
+    const g2 = channel(b, smoke_post_collision.value, 2);
+    const g3 = channel(b, smoke_post_collision.value, 3);
+    const g4 = channel(b, smoke_post_collision.value, 4);
 
     // Bounce-back at the outer walls creates a simple no-flux boundary for
     // the scalar field.
@@ -498,7 +482,7 @@ fn define(b: *Definition) void {
     );
 
     // Render the post-step concentration rather than the pre-step field.
-    const next_smoke = b.sum(next_smoke_g, .{
+    const next_smoke = b.expr(next_smoke_g).sum(.{
         .axes = &.{2},
         .keep_dims = true,
     });
@@ -512,10 +496,10 @@ fn define(b: *Definition) void {
     b.output(next_smoke_g);
 
     // Inspection / rendering.
-    b.output(next_smoke);
-    b.output(rho);
-    b.output(ux);
-    b.output(uy);
+    b.output(next_smoke.value);
+    b.output(rho.value);
+    b.output(ux.value);
+    b.output(uy.value);
 }
 
 pub const definition = blk: {

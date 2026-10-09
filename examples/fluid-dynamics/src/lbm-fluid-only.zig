@@ -24,6 +24,29 @@ const Definition = zgc.DefinitionBuilder;
 
 const Value = zgc.Value;
 
+fn equilibriumPolynomial(
+    comptime eu: zgc.Expr,
+    comptime velocity_sq: zgc.Expr,
+    comptime one: zgc.Expr,
+    comptime three: zgc.Expr,
+    comptime four_point_five: zgc.Expr,
+    comptime one_point_five: zgc.Expr,
+) zgc.Expr {
+    const linear = three.mul(eu);
+    const eu_sq = eu.mul(eu);
+    const quadratic = four_point_five.mul(eu_sq);
+    const speed_correction = one_point_five.mul(velocity_sq);
+    return one.add(linear).add(quadratic).sub(speed_correction);
+}
+
+fn bgkCollision(
+    comptime populations: zgc.Expr,
+    comptime equilibrium: zgc.Expr,
+    comptime omega: zgc.Expr,
+) zgc.Expr {
+    return populations.add(omega.mul(equilibrium.sub(populations)));
+}
+
 fn channel(b: *Definition, comptime tensor: Value, comptime index: usize) Value {
     return b.slice(tensor, .{ .axis = 2, .start = index, .end = index + 1 });
 }
@@ -91,44 +114,48 @@ fn streamSolid(
 
 fn define(b: *Definition) void {
     const sources = b.sources(Sources);
-    const f = sources.input(.f, .f32, &.{ H, W, 9 });
-    const omega = sources.input(.omega, .f32, &.{1});
-    const cx = sources.constant(.cx, .f32, &.{9});
-    const cy = sources.constant(.cy, .f32, &.{9});
-    const weights = sources.constant(.weights, .f32, &.{9});
+    const f = b.expr(sources.input(.f, .f32, &.{ H, W, 9 }));
+    const omega = b.expr(sources.input(.omega, .f32, &.{1}));
+    const cx = b.expr(sources.constant(.cx, .f32, &.{9}));
+    const cy = b.expr(sources.constant(.cy, .f32, &.{9}));
+    const weights = b.expr(sources.constant(.weights, .f32, &.{9}));
 
-    const one = b.scalar(.f32, 1.0);
-    const three = b.scalar(.f32, 3.0);
-    const four_point_five = b.scalar(.f32, 4.5);
-    const one_point_five = b.scalar(.f32, 1.5);
+    const one = b.expr(b.scalar(.f32, 1.0));
+    const three = b.expr(b.scalar(.f32, 3.0));
+    const four_point_five = b.expr(b.scalar(.f32, 4.5));
+    const one_point_five = b.expr(b.scalar(.f32, 1.5));
 
-    const rho = b.sum(f, .{ .axes = &.{2}, .keep_dims = true });
-    const momentum_x = b.sum(b.mul(f, cx), .{ .axes = &.{2}, .keep_dims = true });
-    const momentum_y = b.sum(b.mul(f, cy), .{ .axes = &.{2}, .keep_dims = true });
-    const ux = b.div(momentum_x, rho);
-    const uy = b.div(momentum_y, rho);
-    const velocity_sq = b.add(b.mul(ux, ux), b.mul(uy, uy));
+    const rho = f.sum(.{ .axes = &.{2}, .keep_dims = true });
+    const momentum_x = f.mul(cx).sum(.{ .axes = &.{2}, .keep_dims = true });
+    const momentum_y = f.mul(cy).sum(.{ .axes = &.{2}, .keep_dims = true });
+    const ux = momentum_x.div(rho);
+    const uy = momentum_y.div(rho);
+    const ux_sq = ux.mul(ux);
+    const uy_sq = uy.mul(uy);
+    const velocity_sq = ux_sq.add(uy_sq);
 
-    const eu = b.add(b.mul(ux, cx), b.mul(uy, cy));
-    const equilibrium_poly = b.sub(
-        b.add(
-            b.add(one, b.mul(three, eu)),
-            b.mul(four_point_five, b.mul(eu, eu)),
-        ),
-        b.mul(one_point_five, velocity_sq),
-    );
-    const equilibrium = b.mul(b.mul(rho, weights), equilibrium_poly);
-    const post_collision = b.add(f, b.mul(omega, b.sub(equilibrium, f)));
+    const eu_x = ux.mul(cx);
+    const eu_y = uy.mul(cy);
+    const eu = eu_x.add(eu_y);
+    const equilibrium_poly = eu.apply(equilibriumPolynomial, .{
+        velocity_sq,
+        one,
+        three,
+        four_point_five,
+        one_point_five,
+    });
+    const equilibrium = rho.mul(weights).mul(equilibrium_poly);
+    const post_collision = f.apply(bgkCollision, .{ equilibrium, omega });
 
-    const f0 = channel(b, post_collision, 0);
-    const f1 = channel(b, post_collision, 1);
-    const f2 = channel(b, post_collision, 2);
-    const f3 = channel(b, post_collision, 3);
-    const f4 = channel(b, post_collision, 4);
-    const f5 = channel(b, post_collision, 5);
-    const f6 = channel(b, post_collision, 6);
-    const f7 = channel(b, post_collision, 7);
-    const f8 = channel(b, post_collision, 8);
+    const f0 = channel(b, post_collision.value, 0);
+    const f1 = channel(b, post_collision.value, 1);
+    const f2 = channel(b, post_collision.value, 2);
+    const f3 = channel(b, post_collision.value, 3);
+    const f4 = channel(b, post_collision.value, 4);
+    const f5 = channel(b, post_collision.value, 5);
+    const f6 = channel(b, post_collision.value, 6);
+    const f7 = channel(b, post_collision.value, 7);
+    const f8 = channel(b, post_collision.value, 8);
 
     const next_f = b.concat(&.{
         f0,

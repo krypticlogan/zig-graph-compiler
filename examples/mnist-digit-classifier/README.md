@@ -88,8 +88,9 @@ runner module to another model definition and for its exported symbol contract.
 
 `src/digit-classifier.zig` uses the public workflow expected of a consumer:
 
-1. Instantiate `DefinitionBuilder` with a source enum and front-end bounds.
-2. Run the typed definition function once.
+1. Instantiate the concrete `DefinitionBuilder` and request a typed source
+   facade with `builder.sources(Sources)`.
+2. Define the graph once.
 3. Finish the definition and call `definition.modelWith(...)` to select bound
    and embedded source storage.
 4. Initialize the generated model, bind a runtime input, run, and retrieve an
