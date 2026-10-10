@@ -66,5 +66,6 @@ pub fn model(
         FinalValidated,
         lifetime_analysis,
         SourcePlan,
+        &definition.source_names,
     );
 }

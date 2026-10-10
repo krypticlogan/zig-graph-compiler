@@ -1,5 +1,6 @@
 //! Public ZGC API.
 pub const frontend = struct {
+    pub const modelFromZgir = @import("zgc/frontend/instantiation.zig").modelFromZgir;
     pub const DefinitionBuilder = @import("zgc/frontend/definition.zig").DefinitionBuilder;
     pub const Expr = @import("zgc/frontend/expressive.zig");
     pub const Value = @import("zgc/frontend/definition.zig").Value;

@@ -82,6 +82,7 @@ pub fn Model(
     comptime Validated: type,
     comptime lifetimes: anytype,
     comptime SourcePlan: type,
+    comptime source_name_table: []const [:0]const u8,
 ) type {
     const graph = Validated.graph;
     const plan = Storage.MemoryPlan(capacities, graph, lifetimes, SourcePlan);
@@ -107,6 +108,7 @@ pub fn Model(
         pub const selected_executable_candidate = executable_search.selected();
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;
+        pub const source_names = source_name_table;
 
         memory: [plan.byte_count]u8 align(plan.alignment) = undefined,
         bound_sources: [capacities.max_sources]?[]const u8 = @splat(null),

@@ -7,6 +7,7 @@ const SourceStorage = @import("../storage/source.zig");
 const Tensor = @import("../core/tensor.zig");
 const Expr = @import("expressive.zig");
 const EmptySourceKey = enum(usize) {};
+pub const SerializedSourceKey = enum(usize) { _ };
 
 /// Axes omitted with `null` reduce the entire tensor. Reduced dimensions are
 /// removed unless `keep_dims` retains them as singleton dimensions.
@@ -107,6 +108,7 @@ pub fn Definition(
     comptime input_ref_count: usize,
     comptime output_count: usize,
     comptime rank_capacity: usize,
+    comptime source_name_count: usize,
 ) type {
     return struct {
         const Self = @This();
@@ -123,6 +125,7 @@ pub fn Definition(
         tensors: [tensor_count]TensorRecord,
         input_refs: [input_ref_count]Tensor.Id,
         outputs: [output_count]Tensor.Id,
+        source_names: [source_name_count][:0]const u8,
         node_count: usize = node_count,
         tensor_count: usize = tensor_count,
         input_ref_count: usize = input_ref_count,
@@ -166,6 +169,7 @@ pub const DefinitionBuilder = struct {
     input_refs: []const Tensor.Id = &.{},
     outputs: []const Tensor.Id = &.{},
     source_key_type: ?[]const type = null,
+    source_names: []const [:0]const u8 = &.{},
 
     pub fn init() Self {
         @setEvalBranchQuota(100_000);
@@ -180,7 +184,23 @@ pub const DefinitionBuilder = struct {
             }
         } else {
             self.source_key_type = &[_]type{SourceKey};
+            const fields = @typeInfo(SourceKey).@"enum".fields;
+            var names: [sourceNameCapacity(SourceKey)][:0]const u8 = @splat("");
+            for (fields) |field| names[@intCast(field.value)] = field.name;
+            self.source_names = &names;
         }
+        return .{ .builder = self };
+    }
+
+    /// Attach source names supplied by a serialized frontend. Numeric source
+    /// keys remain internal to the replayed definition.
+    pub fn serializedSources(
+        comptime self: *Self,
+        comptime names: []const [:0]const u8,
+    ) Sources(SerializedSourceKey) {
+        if (self.source_key_type != null) @compileError("definition sources are already initialized");
+        self.source_key_type = &[_]type{SerializedSourceKey};
+        self.source_names = names;
         return .{ .builder = self };
     }
 
@@ -614,9 +634,10 @@ pub const DefinitionBuilder = struct {
         self.input_refs.len,
         self.outputs.len,
         maximumRank(self.tensors),
+        self.source_names.len,
     ) {
         const SourceKey = self.sourceKey();
-        validateSources(self.tensors, SourceKey);
+        validateSources(self.tensors, SourceKey, self.source_names);
         const Result = Definition(
             SourceKey,
             self.nodes.len,
@@ -624,12 +645,14 @@ pub const DefinitionBuilder = struct {
             self.input_refs.len,
             self.outputs.len,
             maximumRank(self.tensors),
+            self.source_names.len,
         );
         return Result{
             .nodes = self.nodes[0..self.nodes.len].*,
             .tensors = self.tensors[0..self.tensors.len].*,
             .input_refs = self.input_refs[0..self.input_refs.len].*,
             .outputs = self.outputs[0..self.outputs.len].*,
+            .source_names = self.source_names[0..self.source_names.len].*,
         };
     }
 
@@ -821,7 +844,19 @@ fn validateSourceKey(comptime Enum: type) void {
     }
 }
 
-fn validateSources(comptime tensors: []const TensorRecord, comptime SourceKey: type) void {
+fn sourceNameCapacity(comptime Enum: type) usize {
+    var capacity: usize = 0;
+    for (@typeInfo(Enum).@"enum".fields) |field| {
+        capacity = @max(capacity, @as(usize, @intCast(field.value)) + 1);
+    }
+    return capacity;
+}
+
+fn validateSources(
+    comptime tensors: []const TensorRecord,
+    comptime SourceKey: type,
+    comptime source_names: []const [:0]const u8,
+) void {
     const fields = @typeInfo(SourceKey).@"enum".fields;
     for (tensors) |tensor| switch (tensor.origin) {
         .source => |source_index| {
@@ -832,7 +867,12 @@ fn validateSources(comptime tensors: []const TensorRecord, comptime SourceKey: t
                     break;
                 }
             }
-            if (!found) @compileError("definition contains a source outside its SourceKey enum");
+            if (!found and @typeInfo(SourceKey).@"enum".is_exhaustive) {
+                @compileError("definition contains a source outside its SourceKey enum");
+            }
+            if (source_index >= source_names.len) {
+                @compileError("definition source does not have a corresponding name");
+            }
         },
         .node, .literal => {},
     };
