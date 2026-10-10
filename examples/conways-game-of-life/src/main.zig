@@ -79,10 +79,11 @@ fn drawHeader(running: bool, generation: u64) void {
     rl.drawText("Space: pause  N: step  R: reset  C: clear  Mouse: draw/erase", 16, 38, 16, .gray);
 
     var status_buffer: [64]u8 = undefined;
-    const status = std.fmt.bufPrintZ(
+    const status = std.fmt.bufPrintSentinel(
         &status_buffer,
         "{s}  generation {d}",
         .{ if (running) "running" else "paused", generation },
+        0
     ) catch unreachable;
     const status_width = rl.measureText(status, 18);
     rl.drawText(status, screen_width - status_width - 16, 14, 18, if (running) .lime else .gold);
