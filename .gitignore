@@ -10,6 +10,8 @@ zig-out
 /benchmarks.md
 inspect-out
 playground
+bindings_test
+bindings
 
 # Local fluid solver performance comparisons
 /examples/fluid-dynamics/src/lbm-benchmark.zig
