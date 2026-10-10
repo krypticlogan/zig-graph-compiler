@@ -11,8 +11,10 @@ runtime storage, supported operations, constraints, and tooling.
   reduction, concatenation, and structural-view contracts.
 - [Model inspection](inspection.md) — writer-based representations and the
   model-specific inspection CLI.
-- [Generated model artifacts](model-artifacts.md) — minimal model executables
-  and their stable exported symbols.
+- [Generated model artifacts](model-artifacts.md) — opaque model lifecycle,
+  versioned C ABI, libraries, and minimal executables.
+- [Python compiler package](python-compiler.md) — external Zig toolchains,
+  compiled-model caching, and the runtime/compiler boundary.
 - [Development state](development-state.md) — implemented capabilities,
   limitations, and tests.
 - [Repository README](../README.md) — public API example and common commands.
