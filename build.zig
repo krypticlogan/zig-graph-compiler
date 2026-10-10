@@ -9,6 +9,18 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const cli_options = b.addOptions();
+    cli_options.addOption([]const u8, "source_root", b.pathFromRoot("."));
+    const cli = b.addExecutable(.{
+        .name = "zgc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "build_options", .module = cli_options.createModule() }},
+        }),
+    });
+    b.installArtifact(cli);
     _ = b.addModule("zgc_inspect_cli", .{
         .root_source_file = b.path("src/cli/inspect.zig"),
         .target = target,
@@ -23,6 +35,12 @@ pub fn build(b: *std.Build) void {
     });
     _ = b.addModule("zgc_model_abi", .{
         .root_source_file = b.path("src/artifact/model_abi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
+    });
+    _ = b.addModule("zgc_zgir_model", .{
+        .root_source_file = b.path("src/artifact/zgir_model.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
