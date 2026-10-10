@@ -13,7 +13,7 @@ The binary is the model.
 Graph traversal, tensor ranks, shapes, dtypes, layouts,
 and kernel selection are compile-time-known.
 
-The project targets Zig 0.16.0.
+The project requires Zig 0.17.0.
 
 ## What's it for?
 
