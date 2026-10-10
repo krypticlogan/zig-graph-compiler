@@ -6,7 +6,7 @@ const Op = op_module.Op;
 const SourceStorage = @import("../storage/source.zig");
 const Tensor = @import("../core/tensor.zig");
 const Expr = @import("expressive.zig");
-const EmptySourceKey = enum(usize) {};
+const EmptySourceKey = enum(noreturn) {};
 
 /// Axes omitted with `null` reduce the entire tensor. Reduced dimensions are
 /// removed unless `keep_dims` retains them as singleton dimensions.
@@ -816,18 +816,18 @@ fn normalizeInsertionAxis(comptime rank: usize, comptime requested_axis: i8) usi
 fn validateSourceKey(comptime Enum: type) void {
     const info = @typeInfo(Enum);
     if (info != .@"enum") @compileError("DefinitionBuilder source keys must be an enum type");
-    for (info.@"enum".fields) |field| {
-        if (field.value < 0) @compileError("source enum values must be non-negative");
+    for (info.@"enum".field_values) |value| {
+        if (value < 0) @compileError("source enum values must be non-negative");
     }
 }
 
 fn validateSources(comptime tensors: []const TensorRecord, comptime SourceKey: type) void {
-    const fields = @typeInfo(SourceKey).@"enum".fields;
+    const values = @typeInfo(SourceKey).@"enum".field_values;
     for (tensors) |tensor| switch (tensor.origin) {
         .source => |source_index| {
             var found = false;
-            for (fields) |field| {
-                if (field.value == source_index) {
+            for (values) |value| {
+                if (value == source_index) {
                     found = true;
                     break;
                 }

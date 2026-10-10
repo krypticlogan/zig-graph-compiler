@@ -12,7 +12,7 @@ pub const BasicModel = model: {
     break :model builder.finish().model();
 };
 
-const FullSources = enum(usize) {};
+const FullSources = enum(noreturn) {};
 const FullDefinition = zgc.DefinitionBuilder;
 pub const FullModel = model: {
     var builder = FullDefinition.init();

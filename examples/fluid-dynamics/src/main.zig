@@ -212,14 +212,14 @@ fn drawHeader(running: bool, step_count: u64, view: View, field: Field, show_vec
     rl.drawText("V: speed/density  A: vectors  Drag: stir  [ / ]: omega", 16, 88, 16, .light_gray);
 
     var status_buffer: [128]u8 = undefined;
-    const status = std.fmt.bufPrintZ(&status_buffer, "{s}  step {d}  {s}  {s}  vectors {s}  omega {d:.2}", .{
+    const status = std.mem.printSentinel(&status_buffer, "{s}  step {d}  {s}  {s}  vectors {s}  omega {d:.2}", .{
         if (running) "running" else "paused",
         step_count,
         if (view == .smoke) "smoke" else "data",
         if (field == .speed) "speed" else "density",
         if (show_vectors) "on" else "off",
         omega,
-    }) catch unreachable;
+    }, 0) catch unreachable;
     rl.drawText(status, 16, 39, 15, if (running) .lime else .gold);
 }
 

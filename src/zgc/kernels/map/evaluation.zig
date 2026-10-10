@@ -101,7 +101,7 @@ inline fn resolve(
 fn Values(comptime program: Program) type {
     var types: [program.instructions.len]type = undefined;
     for (program.instructions, 0..) |instruction, index| types[index] = instruction.dtype.Scalar();
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 inline fn resolveVector(
@@ -136,7 +136,7 @@ fn VectorValues(comptime program: Program, comptime vector_width: usize) type {
     for (program.instructions, 0..) |instruction, index| {
         types[index] = instruction.dtype.Vector(vector_width);
     }
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn Params(comptime program: Program, comptime Inputs: type, comptime instruction: Program.Instruction) type {
@@ -144,7 +144,7 @@ fn Params(comptime program: Program, comptime Inputs: type, comptime instruction
     for (instruction.args[0..types.len], 0..) |reference, index| {
         types[index] = ReferenceType(program, Inputs, reference);
     }
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn VectorParams(
@@ -157,12 +157,12 @@ fn VectorParams(
     for (instruction.args[0..types.len], 0..) |reference, index| {
         types[index] = VectorReferenceType(program, Inputs, reference, vector_width);
     }
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn ReferenceType(comptime program: Program, comptime Inputs: type, comptime reference: Program.ValueRef) type {
     return switch (reference) {
-        .input => |input_index| std.meta.fields(Inputs)[input_index].type.scalar_type,
+        .input => |input_index| @typeInfo(Inputs).@"struct".field_types[input_index].scalar_type,
         .instruction => |instruction_index| program.instructions[instruction_index].dtype.Scalar(),
         .accumulator => @compileError("map expressions cannot reference accumulators"),
     };
@@ -175,7 +175,7 @@ fn VectorReferenceType(
     comptime vector_width: usize,
 ) type {
     return switch (reference) {
-        .input => |input_index| std.meta.fields(Inputs)[input_index].type.dtype.Vector(vector_width),
+        .input => |input_index| @typeInfo(Inputs).@"struct".field_types[input_index].dtype.Vector(vector_width),
         .instruction => |instruction_index| program.instructions[instruction_index].dtype.Vector(vector_width),
         .accumulator => @compileError("map expressions cannot reference accumulators"),
     };

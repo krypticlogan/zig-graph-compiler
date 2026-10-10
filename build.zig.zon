@@ -1,6 +1,7 @@
 .{
     .name = .zgc,
     .version = "0.0.1",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{},
     .fingerprint = 0x5820f916c3bb1bf2,
     .paths = .{ "build.zig", "build.zig.zon", "src" },

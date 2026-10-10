@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -27,6 +27,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    if (b.graph.needed_lazy_dependencies.count() != 0)
+        return error.LazyDependencyNeeded;
     const raylib_mod = raylib_dep.module("raylib");
     const raylib_artifact = raylib_dep.artifact("raylib");
 
@@ -41,7 +43,7 @@ pub fn build(b: *std.Build) void {
     const inspect_step = b.step("inspect", "Inspect the digit-classifier model");
     const inspect_cmd = b.addRunArtifact(model_inspector);
     inspect_step.dependOn(&inspect_cmd.step);
-    if (b.args) |args| inspect_cmd.addArgs(args);
+    inspect_cmd.addPassthruArgs();
 
     const demo_exe = b.addExecutable(.{
         .name = "demo",

@@ -104,10 +104,11 @@ fn drawDashboard(predictions: *const [classifier.output_size]f32) void {
     rl.drawText("Enter clears the canvas", dashboard_x + 32, 62, 20, .light_gray);
 
     var prediction_buffer: [32]u8 = undefined;
-    const prediction_text = std.fmt.bufPrintZ(
+    const prediction_text = std.mem.printSentinel(
         &prediction_buffer,
         "Prediction: {d}",
         .{best},
+        0,
     ) catch unreachable;
     rl.drawText(prediction_text, dashboard_x + 32, 102, 28, .lime);
 
@@ -120,14 +121,15 @@ fn drawDashboard(predictions: *const [classifier.output_size]f32) void {
         rl.drawRectangle(bar_x, y, fill_width, bar_height, if (digit == best) .lime else .gray);
 
         var digit_buffer: [4]u8 = undefined;
-        const digit_text = std.fmt.bufPrintZ(&digit_buffer, "{d}", .{digit}) catch unreachable;
+        const digit_text = std.mem.printSentinel(&digit_buffer, "{d}", .{digit}, 0) catch unreachable;
         rl.drawText(digit_text, bar_x - 30, y - 4, 26, .white);
 
         var probability_buffer: [24]u8 = undefined;
-        const probability_text = std.fmt.bufPrintZ(
+        const probability_text = std.mem.printSentinel(
             &probability_buffer,
             "{d:.1}%",
             .{probability * 100.0},
+            0,
         ) catch unreachable;
         rl.drawText(probability_text, bar_x + bar_width + 12, y, 18, .white);
     }

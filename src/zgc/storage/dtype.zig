@@ -98,7 +98,7 @@ pub const ScalarValue = struct {
     pub fn get(value: ScalarValue, comptime dtype_value: Dtype) dtype_value.Scalar() {
         if (dtype_value == .bool) return value.bits != 0;
         const T = dtype_value.Scalar();
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        const Bits = @Int(.unsigned, @bitSizeOf(T));
         return @bitCast(@as(Bits, @truncate(value.bits)));
     }
 };

@@ -163,7 +163,7 @@ test "scalar and full definitions retain immutable literal geometry" {
     };
 
     try std.testing.expectEqualSlices(usize, &.{}, definition.tensors[0].value.shape.slice());
-    try std.testing.expectEqual(@as(usize, 0), @typeInfo(@TypeOf(definition).Source).@"enum".fields.len);
+    try std.testing.expectEqual(@as(usize, 0), @typeInfo(@TypeOf(definition).Source).@"enum".field_names.len);
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, definition.tensors[2].value.shape.slice());
     switch (definition.tensors[0].origin) {
         .literal => |value| try std.testing.expectEqual(@as(f32, 2.5), value.get(.f32)),
