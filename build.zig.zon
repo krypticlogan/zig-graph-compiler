@@ -3,5 +3,5 @@
     .version = "0.0.1",
     .dependencies = .{},
     .fingerprint = 0x5820f916c3bb1bf2,
-    .paths = .{ "build.zig", "build.zig.zon", "src" },
+    .paths = .{ "bindings", "build.zig", "build.zig.zon", "src" },
 }

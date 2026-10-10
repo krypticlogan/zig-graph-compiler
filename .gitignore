@@ -4,6 +4,10 @@ imgui.ini
 desktop.ini
 synopsis.md
 __pycache__
+/bindings/python/*/build/
+/bindings/python/*/*.egg-info/
+/bindings/python/*/src/*.egg-info/
+/.zgc-cache/
 zig-out
 *zig-pkg
 .DS_Store

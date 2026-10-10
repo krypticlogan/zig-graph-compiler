@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zgc-compiler"
+version = "0.1.0"
+description = "Python graph frontend and external compiler for ZGC model artifacts"
+requires-python = ">=3.10"
+dependencies = ["zgc-runtime>=0.2.0"]
+
+[project.scripts]
+zgc-compiler = "zgc_compiler.cli:main"
+
+[project.entry-points."zgc.cli"]
+compiler = "zgc_compiler.cli:register"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+zgc_compiler = ["py.typed"]
