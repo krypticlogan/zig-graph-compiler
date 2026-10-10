@@ -2,10 +2,12 @@
 
 ZGC is an **allocation-free ahead-of-time tensor computation graph compiler** written in Zig.
 
-A graph architecture is defined at compile time,
+And, it uses Zig's `comptime` as a native compilation engine.
+
+A graph architecture is defined,
 lowered and optimized to a fixed execution graph,
 assigned an inline memory plan,
-and emitted as a specialized Zig type.
+and emitted as a specialized type all before the real program ever executes.
 
 The binary is the model.  
 Graph traversal, tensor ranks, shapes, dtypes, layouts,
@@ -141,6 +143,8 @@ pub fn main() !void {
 - Core-backed extensions and abstractions like `nn` and `img`.
 - Operation and generated-model benchmarks, plus standalone example packages.
 - Lean binaries and first-class inspection for any compiled tensor graph.
+- C ABI for using pre-compiled models external to Zig.
+- Reusable Python bindings that dynamically load any compatible model artifact.
 
 See [development state](docs/development-state.md) for precise limitations and
 [architecture](docs/architecture.md) for the compilation pipeline.
@@ -268,6 +272,7 @@ and recorded results.
 | `src/cli/`            | Model-specific command-line entry points                                                           |
 | `src/artifact/`       | Generated-model artifact entry points                                                              |
 | `src/extensions/`     | Optional domain abstractions exported through `zgc.ext.nn` and `zgc.ext.img`                       |
+| `bindings/`           | Reusable host-language bindings for generated model artifacts                                      |
 | `tests/`              | Compile-time graph, runtime model, validation, view, and kernel coverage                           |
 | `benchmarks/`         | Operation and generated-model benchmark harness, with recorded results                             |
 | `examples/`           | Standalone model definitions, interactive applications, inspection, and artifact analysis          |
