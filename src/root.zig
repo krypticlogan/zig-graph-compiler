@@ -43,6 +43,10 @@ pub const execution = struct {
     pub const KernelPlan = @import("zgc/execution/execution.zig").KernelPlan;
 };
 
+pub const artifact = struct {
+    pub const ABI = @import("artifact/abi.zig");
+};
+
 pub const DefinitionBuilder = frontend.DefinitionBuilder;
 pub const Expr = frontend.Expr;
 pub const Value = frontend.Value;

@@ -19,7 +19,15 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/artifact/model_runner.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
     });
+    _ = b.addModule("zgc_model_abi", .{
+        .root_source_file = b.path("src/artifact/model_abi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
+    });
+    b.installFile("bindings/c/include/zgc_model.h", "include/zgc_model.h");
 
     // tests
     const test_embed_params = b.createModule(.{
@@ -56,16 +64,19 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/artifact/model_runner.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "model", .module = runner_test_model }},
+        .imports = &.{
+            .{ .name = "model", .module = runner_test_model },
+            .{ .name = "zgc", .module = zgc_mod },
+        },
     });
     const runner_test_exe = b.addExecutable(.{
         .name = "zgc-model-runner-test",
         .root_module = runner_test_module,
     });
     runner_test_exe.forceUndefinedSymbol(if (target.result.os.tag == .macos)
-        "_zgc_run_model"
+        "_zgc_model_run"
     else
-        "zgc_run_model");
+        "zgc_model_run");
 
     const check_step = b.step("check", "Compile tests without running them");
     check_step.dependOn(&tests.step);

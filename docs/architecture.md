@@ -223,10 +223,12 @@ without adding rendering responsibilities to the model, graph, operation,
 tensor, or storage types. It also renders bounded mutable memory from a model
 instance when requested.
 
-`zgc_model_runner` specializes a minimal executable around a consumer-provided
-model module. The generated artifact exports a stable execution symbol and
-model layout metadata while leaving initialization, runtime source binding, and
-output handling to the application.
+`zgc_model_abi` specializes a versioned C ABI around a consumer-provided model
+module. It exposes opaque placement initialization, source and output
+descriptors, copied or borrowed source loading, execution, and borrowed or
+copied output access. `zgc_model_runner` packages the same interface in a
+minimal executable for generated-code inspection. Artifact operations retain
+the model's compile-time geometry and selected executable schedule.
 
 View nodes do not execute kernels. Their result layouts are resolved during
 graph construction, and downstream compute kernels receive static-geometry

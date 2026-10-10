@@ -71,18 +71,33 @@ pub fn build(b: *std.Build) void {
         .root_module = model_runner_mod,
     });
     model_exe.forceUndefinedSymbol(if (target.result.os.tag == .macos)
-        "_zgc_run_model"
+        "_zgc_model_run"
     else
-        "zgc_run_model");
+        "zgc_model_run");
 
     const install_model = b.addInstallArtifact(model_exe, .{});
     const build_model_step = b.step("build-model", "Build the lean generated-model binary");
     build_model_step.dependOn(&install_model.step);
 
-    const disassembler = if (target.result.os.tag == .macos)
-        b.addSystemCommand(&.{ "xcrun", "llvm-objdump", "--disassemble-symbols=_zgc_run_model" })
+    const model_abi_mod = zgc_dep.module("zgc_model_abi");
+    model_abi_mod.addImport("model", classifier_model_mod);
+    const model_library = b.addLibrary(.{
+        .name = "zgc-model",
+        .linkage = .dynamic,
+        .root_module = model_abi_mod,
+    });
+    model_library.forceUndefinedSymbol(if (target.result.os.tag == .macos)
+        "_zgc_model_run"
     else
-        b.addSystemCommand(&.{ "objdump", "--disassemble=zgc_run_model" });
+        "zgc_model_run");
+    const install_model_library = b.addInstallArtifact(model_library, .{});
+    const build_model_library_step = b.step("build-model-library", "Build the generated-model C ABI library");
+    build_model_library_step.dependOn(&install_model_library.step);
+
+    const disassembler = if (target.result.os.tag == .macos)
+        b.addSystemCommand(&.{ "xcrun", "llvm-objdump", "--disassemble-symbols=_zgc_model_run" })
+    else
+        b.addSystemCommand(&.{ "objdump", "--disassemble=zgc_model_run" });
     disassembler.addArtifactArg(model_exe);
     const disassemble_model_step = b.step("disassemble-model", "Disassemble the generated model execution symbol");
     disassemble_model_step.dependOn(&disassembler.step);

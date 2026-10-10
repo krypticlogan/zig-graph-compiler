@@ -62,10 +62,19 @@ zig build build-model -Doptimize=ReleaseFast
 
 The resulting artifact is `zig-out/bin/zgc-model`. It uses ZGC's
 `zgc_model_runner` module and the `Model` exported from
-`src/digit-classifier.zig`. Its exported `zgc_run_model` symbol contains model
+`src/digit-classifier.zig`. Its exported `zgc_model_run` symbol contains model
 execution without logging, timing, input generation, or output formatting. The
 executable entry point performs no inference because runtime input binding
 belongs to the host application.
+
+Build the same model as a shared library exposing the complete C ABI:
+
+```sh
+zig build build-model-library -Doptimize=ReleaseFast
+```
+
+The host can discover source and output metadata, initialize opaque model
+storage, copy or bind sources, execute the model, and borrow or copy outputs.
 
 Disassemble only the stable execution symbol:
 
@@ -77,12 +86,12 @@ On macOS, inspect it interactively with LLDB:
 
 ```text
 lldb zig-out/bin/zgc-model
-(lldb) image lookup --name zgc_run_model
-(lldb) disassemble --name zgc_run_model
+(lldb) image lookup --name zgc_model_run
+(lldb) disassemble --name zgc_model_run
 ```
 
-See [generated model artifacts](../../docs/model-artifacts.md) for wiring the same
-runner module to another model definition and for its exported symbol contract.
+See [generated model artifacts](../../docs/model-artifacts.md) for the host
+lifecycle, C header, source policies, and build integration.
 
 ## Model definitions
 
