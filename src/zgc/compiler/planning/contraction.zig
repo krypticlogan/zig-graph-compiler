@@ -37,6 +37,7 @@ pub fn planned(
     comptime lhs_id: usize,
     comptime rhs_id: usize,
     comptime output_id: usize,
+    comptime requested_strategy: ?Plan.Strategy,
 ) type {
     const output = graph.tensors[output_id].?;
     const domain_shape = output.shape.dims[0..output.shape.rank].*;
@@ -48,17 +49,26 @@ pub fn planned(
         .output = 0,
         .value = .contraction,
     }};
-    const selected = plan(
-        capacity,
-        graph.tensors[lhs_id].?,
-        graph.tensors[rhs_id].?,
-        output,
-        .{
-            .domain = .{ .shape = &domain_shape },
-            .loads = &loads,
-            .stores = &stores,
-        },
-    );
+    const selected = comptime blk: {
+        var choice = plan(
+            capacity,
+            graph.tensors[lhs_id].?,
+            graph.tensors[rhs_id].?,
+            output,
+            .{
+                .domain = .{ .shape = &domain_shape },
+                .loads = &loads,
+                .stores = &stores,
+            },
+        );
+        if (requested_strategy) |strategy| {
+            if (!supportsStrategy(graph.tensors[lhs_id].?, graph.tensors[rhs_id].?, output, strategy)) {
+                @compileError("requested matmul strategy is incompatible with its layouts");
+            }
+            choice.strategy = strategy;
+        }
+        break :blk choice;
+    };
     return struct {
         pub const kernel_plan: Plan = selected;
     };
@@ -71,8 +81,9 @@ pub fn selectOutputLayout(
     comptime rhs_id: Tensor.Id,
     shape: Tensor.Shape(capacity.max_rank),
     comptime analysis: anytype,
+    comptime pack_weights: bool,
 ) Tensor.Layout(capacity.max_rank) {
-    packWeights(graph, rhs_id, analysis);
+    if (pack_weights) packWeights(graph, rhs_id, analysis);
 
     const vector_len = std.simd.suggestVectorLength(f32) orelse return .contiguous(shape);
     if (shape.rank != 2 or shape.at(0) < vector_len) return .contiguous(shape);
@@ -98,16 +109,21 @@ pub fn validate(
     comptime rhs: anytype,
     comptime output: anytype,
 ) void {
-    const compatible = switch (plan_value.strategy) {
+    if (!supportsStrategy(lhs, rhs, output, plan_value.strategy)) {
+        @compileError("optimized matmul strategy is incompatible with its layouts");
+    }
+}
+
+pub fn supportsStrategy(lhs: anytype, rhs: anytype, output: anytype, strategy: Plan.Strategy) bool {
+    return switch (strategy) {
         .output_columns => rhs.layout.strides[1] == 1 and output.layout.strides[1] == 1,
         .contracted_axis => lhs.layout.strides[1] == 1 and rhs.layout.strides[0] == 1,
         .output_rows => lhs.layout.strides[0] == 1 and output.layout.strides[0] == 1,
         .scalar => true,
     };
-    if (!compatible) @compileError("optimized matmul strategy is incompatible with its layouts");
 }
 
-fn selectStrategy(
+pub fn selectStrategy(
     comptime capacity: Graph.Capacity,
     lhs: Tensor.Info(capacity.max_rank),
     rhs: Tensor.Info(capacity.max_rank),

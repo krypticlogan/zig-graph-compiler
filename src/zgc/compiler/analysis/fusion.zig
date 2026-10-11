@@ -24,7 +24,37 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                     .regions = discovered,
                 });
             }
+            const independent = selectIndependentReductions(semantic_graph, analysis);
+            if (hasSelectedRegion(semantic_graph, independent)) {
+                candidates.add(.{
+                    .regime = .independent,
+                    .regions = independent,
+                });
+            }
             return candidates;
+        }
+
+        /// Keep reductions as separate specialized kernels. Search can combine
+        /// these with discovered map groups or choose the shared traversal.
+        fn selectIndependentReductions(comptime graph: SemanticGraph, comptime analysis: GraphFacts) FusionSelection(capacity.max_nodes) {
+            var result: FusionSelection(capacity.max_nodes) = .{};
+            for (analysis.dependencies.topological_order[0..graph.node_ct]) |node_id| {
+                const descriptor = reductionForNode(graph, node_id) orelse continue;
+                const input_id = graph.input_refs[graph.nodes[node_id].?.input_start].?;
+                const region_id = result.region_count;
+                var group: Group(capacity.max_nodes) = .{
+                    .descriptor = descriptor,
+                    .domain_tensor = input_id,
+                    .anchor_tensor = input_id,
+                    .emit_node = node_id,
+                };
+                group.reduction_nodes[0] = node_id;
+                group.reduction_count = 1;
+                result.reduction_storage[region_id] = group;
+                result.node_region[node_id] = .{ .reduction = region_id };
+                result.region_count += 1;
+            }
+            return result;
         }
 
         fn hasSelectedRegion(comptime graph: SemanticGraph, selection: FusionSelection(capacity.max_nodes)) bool {
@@ -264,6 +294,7 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
 pub const FusionRegime = enum {
     unfused,
     discovered,
+    independent,
 };
 
 pub fn FusionCandidate(comptime node_count: usize) type {
@@ -276,7 +307,7 @@ pub fn FusionCandidate(comptime node_count: usize) type {
 pub fn FusionCandidates(comptime node_count: usize) type {
     return struct {
         const Self = @This();
-        pub const max_count = 2;
+        pub const max_count = 3;
 
         values: [max_count]?FusionCandidate(node_count) = @splat(null),
         count: usize = 0,

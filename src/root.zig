@@ -12,6 +12,8 @@ pub const frontend = struct {
 };
 
 pub const compiler = struct {
+    pub const analysis = @import("zgc/compiler/analysis/root.zig");
+    pub const planning = @import("zgc/compiler/planning/root.zig");
     pub const PlanCandidate = @import("zgc/compiler/search.zig").PlanCandidate;
     pub const PlanCost = @import("zgc/compiler/search.zig").PlanCost;
     pub const MemoryTraffic = @import("zgc/compiler/search.zig").MemoryTraffic;

@@ -21,6 +21,7 @@ pub fn Lowering(comptime capacity: Graph.Capacity) type {
             comptime topological_order: [capacity.max_nodes]usize,
             comptime fusion_regions: FusionRegions,
             comptime remap_regions: RemapRegions,
+            comptime contraction_strategies: [capacity.max_nodes]?ContractionPlanner.Plan.Strategy,
         ) Executable(capacity, Execution.Op) {
             var program: Executable(capacity, Execution.Op) = .init();
 
@@ -87,7 +88,7 @@ pub fn Lowering(comptime capacity: Graph.Capacity) type {
                 }
                 const executable: Execution.Op = switch (node.op) {
                     .view => |view| .{ .view = view },
-                    .compute => |compute| .{ .compute = planCompute(compute, &source_graph, node) },
+                    .compute => |compute| .{ .compute = planCompute(compute, &source_graph, node, contraction_strategies[node_id]) },
                 };
                 var inputs: [node.input_count]usize = undefined;
                 inline for (0..node.input_count) |input_index| {
@@ -127,12 +128,13 @@ pub fn Lowering(comptime capacity: Graph.Capacity) type {
             comptime compute: Semantic.Op.Compute,
             comptime graph: anytype,
             comptime node: anytype,
+            comptime strategy: ?ContractionPlanner.Plan.Strategy,
         ) Execution.ExecutableCompute {
             return switch (compute) {
                 .matmul => blk: {
                     const lhs_id = graph.input_refs[node.input_start].?;
                     const rhs_id = graph.input_refs[node.input_start + 1].?;
-                    const Planned = ContractionPlanner.planned(capacity, graph, lhs_id, rhs_id, node.result);
+                    const Planned = ContractionPlanner.planned(capacity, graph, lhs_id, rhs_id, node.result, strategy);
                     break :blk .{ .kernel = .{ .contraction = Planned.kernel_plan } };
                 },
                 else => .{ .direct = compute },

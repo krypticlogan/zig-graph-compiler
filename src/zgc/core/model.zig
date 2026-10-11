@@ -104,6 +104,8 @@ pub fn Model(
         pub const fusion_candidate_count = executable_search.fusion_candidate_count;
         pub const layout_candidate_count = executable_search.layout_candidate_count;
         pub const remap_candidate_count = executable_search.remap_candidate_count;
+        pub const contraction_candidate_count = executable_search.contraction_candidate_count;
+        pub const generated_contraction_strategies = executable_search.generated_contraction_strategies;
         pub const selected_executable_candidate = executable_search.selected();
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;

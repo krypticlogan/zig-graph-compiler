@@ -10,6 +10,7 @@ pub const LayoutRegime = enum {
     canonical,
     mixed,
     propagated,
+    unpacked,
 };
 
 /// A physical layout condition advertised by an implementation candidate.
@@ -55,7 +56,7 @@ pub fn LayoutCandidate(comptime capacity: Graph.Capacity) type {
 
 pub fn LayoutCandidates(comptime capacity: Graph.Capacity) type {
     return struct {
-        values: [2]?LayoutCandidate(capacity) = @splat(null),
+        values: [3]?LayoutCandidate(capacity) = @splat(null),
         count: usize = 0,
 
         fn add(candidates: *@This(), candidate: LayoutCandidate(capacity)) void {
@@ -73,10 +74,15 @@ pub fn LayoutAnalysis(comptime capacity: Graph.Capacity) type {
         pub fn analyze(comptime semantic_graph: SemanticGraph, comptime analysis: Analysis) LayoutCandidates(capacity) {
             var candidates: LayoutCandidates(capacity) = .{};
             candidates.add(.{ .regime = .canonical, .regions = .{} });
-            const propagated = propagate(semantic_graph, analysis);
+            const propagated = propagate(semantic_graph, analysis, true);
             const selection = partitionChanges(semantic_graph, propagated);
             if (selection.region_count != 0) {
                 candidates.add(.{ .regime = .propagated, .regions = selection });
+            }
+            const unpacked = propagate(semantic_graph, analysis, false);
+            const unpacked_selection = partitionChanges(semantic_graph, unpacked);
+            if (unpacked_selection.region_count != 0 and !std.meta.eql(unpacked_selection, selection)) {
+                candidates.add(.{ .regime = .unpacked, .regions = unpacked_selection });
             }
             return candidates;
         }
@@ -140,7 +146,7 @@ pub fn LayoutAnalysis(comptime capacity: Graph.Capacity) type {
                 std.mem.eql(isize, lhs.layout.strides[0..lhs.shape.rank], rhs.layout.strides[0..rhs.shape.rank]);
         }
 
-        fn propagate(comptime raw: SemanticGraph, comptime analysis: Analysis) SemanticGraph {
+        fn propagate(comptime raw: SemanticGraph, comptime analysis: Analysis, comptime pack_weights: bool) SemanticGraph {
             var graph: SemanticGraph = .init();
 
             for (0..raw.tensor_ct) |tensor_id| {
@@ -172,7 +178,7 @@ pub fn LayoutAnalysis(comptime capacity: Graph.Capacity) type {
                         break :blk;
                     },
                     .compute => |compute| blk: {
-                        result.layout = computeLayout(compute, &graph, input_ids, result.shape, analysis);
+                        result.layout = computeLayout(compute, &graph, input_ids, result.shape, analysis, pack_weights);
                         break :blk;
                     },
                 }
@@ -203,9 +209,10 @@ pub fn LayoutAnalysis(comptime capacity: Graph.Capacity) type {
             comptime input_ids: []const ?Tensor.Id,
             shape: Tensor.Shape(capacity.max_rank),
             comptime analysis: Analysis,
+            comptime pack_weights: bool,
         ) Tensor.Layout(capacity.max_rank) {
             return switch (op) {
-                .matmul => matmul.selectOutputLayout(capacity, graph, input_ids[0].?, input_ids[1].?, shape, analysis),
+                .matmul => matmul.selectOutputLayout(capacity, graph, input_ids[0].?, input_ids[1].?, shape, analysis, pack_weights),
                 .where => preserveBatchLayout(graph, input_ids[1].?, shape),
                 .contiguous, .pad, .shift, .slice_loop, .sum, .mean, .min, .max, .concat => .contiguous(shape),
                 else => preserveBatchLayout(graph, input_ids[0].?, shape),
