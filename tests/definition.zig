@@ -51,8 +51,11 @@ test "definition counting and lowering preserve exact graph contracts" {
     const vector_width = std.simd.suggestVectorLength(f32) orelse 1;
     switch (graph.nodes[0].?.op.compute) {
         .kernel => |kernel| {
-            try std.testing.expect(vector_width <= 4);
-            try std.testing.expectEqualStrings("contracted_axis", @tagName(kernel.contraction.strategy));
+            if (vector_width <= 4) {
+                try std.testing.expectEqualStrings("contracted_axis", @tagName(kernel.contraction.strategy));
+            } else {
+                try std.testing.expectEqualStrings("scalar", @tagName(kernel.contraction.strategy));
+            }
         },
         .direct => |semantic| {
             try std.testing.expect(vector_width > 4);

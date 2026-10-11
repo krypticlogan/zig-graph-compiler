@@ -36,6 +36,110 @@ test "executable search combines analysis alternatives and schedule variants" {
     try std.testing.expectEqual(.memory_pressure, Model.selected_executable_candidate.schedule);
     try std.testing.expect(Model.executable_candidate_frontier.count > 0);
     try std.testing.expect(Model.executable_candidate_frontier.count <= 16);
+    const fingerprint = zgc.compiler.analysis.fingerprint;
+    try std.testing.expectEqual(fingerprint.executable(Model.executable), Model.structural_fingerprint);
+    try std.testing.expect(fingerprint.executable(reference.executable) != Model.structural_fingerprint);
+    const cost = Model.selected_executable_candidate.cost;
+    try std.testing.expect(cost.access_work > 0);
+    try std.testing.expectEqual(
+        cost.arithmetic_work + cost.access_work + cost.register_pressure_work + cost.transfer_work,
+        cost.estimated_runtime_work,
+    );
+}
+
+test "model selection honors optimization targets and a forced frontier index" {
+    const definition = models.matmul_definition;
+    const Default = models.MatmulModel;
+    const Fast = definition.modelWithOptions(.{ .target = .fast });
+    const Memory = definition.modelWithOptions(.{ .target = .memory });
+    const Small = definition.modelWithOptions(.{ .target = .small });
+    const frontier = Default.executable_candidate_frontier;
+    try std.testing.expect(frontier.count > 1);
+
+    for (frontier.candidates[0..frontier.count]) |entry| {
+        try std.testing.expect(Fast.selected_executable_candidate.cost.estimated_runtime_work <=
+            entry.?.cost.estimated_runtime_work);
+        try std.testing.expect(Memory.selected_executable_candidate.cost.peak_memory_bytes <=
+            entry.?.cost.peak_memory_bytes);
+        try std.testing.expect(Small.selected_executable_candidate.cost.code_size_units <=
+            entry.?.cost.code_size_units);
+    }
+    try std.testing.expectEqual(.balanced, Default.selection_options.target);
+
+    const forced_index = frontier.count - 1;
+    const Forced = definition.modelWithOptions(.{ .target = .fast, .frontier_index = forced_index });
+    try std.testing.expectEqual(forced_index, Forced.selected_executable_candidate_index);
+    try std.testing.expect(std.meta.eql(
+        frontier.candidates[forced_index].?.executable,
+        Forced.executable,
+    ));
+
+    var regular = Default.init();
+    var forced = Forced.init();
+    const input: [models.matmul_batch * 3]f32 = @splat(1);
+    const weights = [_]f32{ 1, 2, 3, 4, 5, 6 };
+    try regular.copyInput(.input, &input);
+    try regular.copySource(.weights, &weights);
+    try forced.copyInput(.input, &input);
+    try forced.copySource(.weights, &weights);
+    regular.run();
+    forced.run();
+    for (0..models.matmul_batch) |row| {
+        for (0..2) |column| {
+            try std.testing.expectApproxEqAbs(
+                regular.outputView(0).get(.{ row, column }),
+                forced.outputView(0).get(.{ row, column }),
+                0.0001,
+            );
+        }
+    }
+}
+
+test "expression liveness distinguishes a chain from a wide reduction tree" {
+    const Cost = zgc.compiler.analysis.Cost;
+    const Instruction = Cost.Expression.Instruction;
+    const chain = comptime blk: {
+        var instructions: [16]Instruction = undefined;
+        for (0..instructions.len) |index| {
+            instructions[index] = .{
+                .operation = .add,
+                .dtype = .f32,
+                .args = .{
+                    if (index == 0) .{ .input = 0 } else .{ .instruction = index - 1 },
+                    .{ .input = 1 },
+                    .{ .input = 0 },
+                },
+            };
+        }
+        break :blk instructions;
+    };
+    const wide = comptime blk: {
+        var instructions: [63]Instruction = undefined;
+        for (0..32) |index| {
+            instructions[index] = .{
+                .operation = .add,
+                .dtype = .f32,
+                .args = .{ .{ .input = index }, .{ .input = 32 + index }, .{ .input = 0 } },
+            };
+        }
+        for (32..63) |index| {
+            instructions[index] = .{
+                .operation = .add,
+                .dtype = .f32,
+                .args = .{
+                    .{ .instruction = if (index == 32) 0 else index - 1 },
+                    .{ .instruction = index - 31 },
+                    .{ .input = 0 },
+                },
+            };
+        }
+        break :blk instructions;
+    };
+    const chain_live = comptime Cost.peakLiveValues(.{ .instructions = &chain });
+    const wide_live = comptime Cost.peakLiveValues(.{ .instructions = &wide });
+    try std.testing.expect(chain_live < wide_live);
+    try std.testing.expectEqual(@as(u128, 0), Cost.registerPressureWork(100, 8, chain_live + 5));
+    try std.testing.expect(Cost.registerPressureWork(100, 8, wide_live + 5) > 0);
 }
 
 test "contraction analysis choices lower to distinct specialized plans" {
@@ -111,4 +215,14 @@ test "structured costs support Pareto dominance" {
     try std.testing.expect(!baseline.dominates(improvement));
     try std.testing.expect(!tradeoff.dominates(improvement));
     try std.testing.expect(!improvement.dominates(tradeoff));
+}
+
+test "scratch cost accounts for reusable intermediate storage" {
+    const cost = models.ReuseModel.selected_executable_candidate.cost;
+    try std.testing.expectEqual(models.ReuseModel.memory_plan.byte_count, cost.peak_memory_bytes);
+    try std.testing.expect(cost.scratch_memory_bytes > 0);
+    try std.testing.expectEqual(
+        cost.peak_memory_bytes,
+        cost.persistent_memory_bytes + cost.scratch_memory_bytes,
+    );
 }

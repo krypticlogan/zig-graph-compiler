@@ -18,6 +18,7 @@ pub const compiler = struct {
     pub const PlanCost = @import("zgc/compiler/search.zig").PlanCost;
     pub const MemoryTraffic = @import("zgc/compiler/search.zig").MemoryTraffic;
     pub const ConversionCost = @import("zgc/compiler/search.zig").ConversionCost;
+    pub const OptimizationTarget = @import("zgc/compiler/search.zig").OptimizationTarget;
     pub const LayoutRequirement = @import("zgc/compiler/analysis/root.zig").LayoutRequirement;
     pub const LayoutResult = @import("zgc/compiler/analysis/root.zig").LayoutResult;
     pub const Validation = @import("zgc/validation.zig");

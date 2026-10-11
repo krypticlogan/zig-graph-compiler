@@ -4,6 +4,8 @@ pub const remap = @import("remap.zig");
 pub const layout = @import("layout.zig");
 pub const contraction = @import("contraction.zig");
 pub const local_cost = @import("local_cost.zig");
+pub const cost = @import("cost.zig");
+pub const fingerprint = @import("fingerprint.zig");
 
 pub const SemanticAnalysis = semantic.SemanticAnalysis;
 pub const Consumer = semantic.Consumer;
@@ -39,3 +41,4 @@ pub const ContractionAnalysis = contraction.Analysis;
 pub const ContractionCandidates = contraction.Candidates;
 pub const ContractionPolicy = contraction.Policy;
 pub const LocalCost = local_cost;
+pub const Cost = cost;

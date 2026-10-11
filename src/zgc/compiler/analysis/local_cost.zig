@@ -1,3 +1,4 @@
+const std = @import("std");
 const Contraction = @import("../planning/contraction.zig");
 const Graph = @import("../../core/graph.zig");
 const contraction_analysis = @import("contraction.zig");
@@ -5,6 +6,7 @@ const contraction_analysis = @import("contraction.zig");
 pub const Estimate = struct {
     traffic_saved_bytes: u128 = 0,
     contraction_work_delta: i128 = 0,
+    estimated_runtime_delta: i128 = 0,
 };
 
 /// Cheap partial estimate used before executable lowering. It counts only
@@ -40,6 +42,9 @@ pub fn estimate(comptime capacity: Graph.Capacity, comptime graph: anytype, repr
         result.contraction_work_delta += @as(i128, @intCast(contraction_analysis.estimateWork(lhs, rhs, strategy))) -
             @as(i128, @intCast(contraction_analysis.estimateWork(lhs, rhs, default_strategy)));
     }
+    const vector_bytes = (std.simd.suggestVectorLength(f32) orelse 1) * @sizeOf(f32);
+    const saved_transfer_units = result.traffic_saved_bytes / vector_bytes;
+    result.estimated_runtime_delta = result.contraction_work_delta - @as(i128, @intCast(saved_transfer_units));
     return result;
 }
 

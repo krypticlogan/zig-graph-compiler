@@ -11,9 +11,11 @@ pub fn model(
     comptime Definition: type,
     comptime definition: Definition,
     comptime source_configuration: anytype,
+    comptime selection: Search.SelectionOptions,
 ) type {
     const compile_work = 40_000 + definition.node_count *
-        (definition.tensor_count + definition.input_ref_count + Definition.max_rank + 16) * 4096;
+        (definition.tensor_count + definition.input_ref_count + Definition.max_rank + 16) *
+        4096 * Search.max_candidates;
     @setEvalBranchQuota(compile_work);
     const capacity = Construction.count(Definition, definition);
     const raw_graph = Construction.GraphConstruction(Definition, capacity).build(definition);
@@ -45,7 +47,7 @@ pub fn model(
         contraction_candidates,
         source_configuration,
     );
-    const selected_candidate = executable_search.selected();
+    const selected_candidate = executable_search.selected(selection);
     const executable = selected_candidate.executable;
     const FinalValidated = validation.FinalValidation(capacity).validate(executable);
     const graph = FinalValidated.graph;
@@ -65,6 +67,7 @@ pub fn model(
         SemanticValidated,
         semantic_analysis,
         executable_search,
+        selection,
         FinalValidated,
         lifetime_analysis,
         SourcePlan,

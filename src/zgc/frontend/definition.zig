@@ -118,6 +118,12 @@ pub fn Definition(
             /// Storage policy applied to the selected source.
             binding: SourceStorage.Binding,
         };
+        pub const ModelOptions = struct {
+            sources: []const SourceOverride = &.{},
+            target: @import("../compiler/search.zig").OptimizationTarget = .balanced,
+            /// An index in the retained executable frontier overrides target.
+            frontier_index: ?usize = null,
+        };
 
         nodes: [node_count]Node,
         tensors: [tensor_count]TensorRecord,
@@ -131,16 +137,17 @@ pub fn Definition(
         /// Run capacity counting, graph lowering, memory planning, and model
         /// generation for this completed definition.
         pub fn model(comptime definition: Self) type {
+            return definition.modelWithOptions(.{});
+        }
+
+        /// Compile with source overrides and executable selection preferences.
+        pub fn modelWithOptions(comptime definition: Self, comptime options: ModelOptions) type {
             return @import("../compiler/root.zig").model(
                 Self,
                 definition,
-                @as([]const SourceOverride, &.{}),
+                options.sources,
+                .{ .target = options.target, .frontier_index = options.frontier_index },
             );
-        }
-
-        /// Compile this definition with typed source-storage overrides.
-        pub fn modelWith(comptime definition: Self, comptime sources: []const SourceOverride) type {
-            return @import("../compiler/root.zig").model(Self, definition, sources);
         }
     };
 }
@@ -738,7 +745,7 @@ pub fn Sources(comptime SourceKey: type) type {
             comptime dtype: Dtype,
             comptime shape: []const usize,
         ) Value {
-            return self.builder.addSource(@intCast(@intFromEnum(key)), .input, dtype, shape);
+            return self.builder.addSource(@intCast(@backingInt(key)), .input, dtype, shape);
         }
 
         pub fn parameter(
@@ -747,7 +754,7 @@ pub fn Sources(comptime SourceKey: type) type {
             comptime dtype: Dtype,
             comptime shape: []const usize,
         ) Value {
-            return self.builder.addSource(@intCast(@intFromEnum(key)), .parameter, dtype, shape);
+            return self.builder.addSource(@intCast(@backingInt(key)), .parameter, dtype, shape);
         }
 
         pub fn constant(
@@ -756,7 +763,7 @@ pub fn Sources(comptime SourceKey: type) type {
             comptime dtype: Dtype,
             comptime shape: []const usize,
         ) Value {
-            return self.builder.addSource(@intCast(@intFromEnum(key)), .constant, dtype, shape);
+            return self.builder.addSource(@intCast(@backingInt(key)), .constant, dtype, shape);
         }
     };
 }

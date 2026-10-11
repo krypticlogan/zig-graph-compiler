@@ -79,6 +79,7 @@ pub fn Model(
     comptime SemanticValidated: type,
     comptime semantic_analysis: anytype,
     comptime executable_search: anytype,
+    comptime selection: @import("../compiler/search.zig").SelectionOptions,
     comptime Validated: type,
     comptime lifetimes: anytype,
     comptime SourcePlan: type,
@@ -90,6 +91,7 @@ pub fn Model(
         pub const SourceKeyType = SourceKey;
         pub const SourceError = error{SourceSizeMismatch};
         pub const executable = graph;
+        pub const structural_fingerprint = @import("../compiler/analysis/fingerprint.zig").executable(graph);
         pub const memory_plan = plan;
         pub const internal_capacity = capacities;
         pub const raw_graph = raw;
@@ -106,7 +108,9 @@ pub fn Model(
         pub const remap_candidate_count = executable_search.remap_candidate_count;
         pub const contraction_candidate_count = executable_search.contraction_candidate_count;
         pub const generated_contraction_strategies = executable_search.generated_contraction_strategies;
-        pub const selected_executable_candidate = executable_search.selected();
+        pub const selection_options = selection;
+        pub const selected_executable_candidate_index = executable_search.selectedIndex(selection);
+        pub const selected_executable_candidate = executable_search.selected(selection);
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;
 

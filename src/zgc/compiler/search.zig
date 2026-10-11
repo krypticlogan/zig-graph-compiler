@@ -24,8 +24,16 @@ pub fn SearchResult(comptime capacity: Graph.Capacity) type {
         contraction_candidate_count: usize,
         generated_contraction_strategies: [4]bool,
 
-        pub fn selected(comptime result: @This()) PlanCandidate(capacity) {
-            return result.frontier.best();
+        pub fn selected(comptime result: @This(), comptime options: SelectionOptions) PlanCandidate(capacity) {
+            return result.frontier.candidates[result.selectedIndex(options)].?;
+        }
+
+        pub fn selectedIndex(comptime result: @This(), comptime options: SelectionOptions) usize {
+            if (options.frontier_index) |index| {
+                if (index >= result.frontier.count) @compileError("frontier_index is outside the retained executable frontier");
+                return index;
+            }
+            return result.frontier.bestIndex(options.target);
         }
     };
 }
@@ -132,6 +140,10 @@ pub const MemoryTraffic = struct {
 
 pub const PlanCost = struct {
     estimated_runtime_work: u128,
+    arithmetic_work: u128 = 0,
+    access_work: u128 = 0,
+    register_pressure_work: u128 = 0,
+    transfer_work: u128 = 0,
     memory_traffic: MemoryTraffic = .{},
     peak_memory_bytes: usize,
     persistent_memory_bytes: usize,
@@ -181,6 +193,12 @@ pub const PlanCost = struct {
 
 pub const Origin = enum { reference, planned };
 pub const max_candidates = 16;
+pub const OptimizationTarget = enum { balanced, memory, fast, small };
+pub const SelectionOptions = struct {
+    target: OptimizationTarget = .balanced,
+    /// Index into the retained frontier; overrides the optimization target.
+    frontier_index: ?usize = null,
+};
 
 pub fn PlanCandidate(comptime capacity: Graph.Capacity) type {
     return struct {
@@ -202,10 +220,9 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
         candidates: [max_candidates]?Candidate = @splat(null),
         count: usize = 0,
 
-        /// Insert one completed candidate while retaining a bounded Pareto
-        /// frontier. Once full, the deterministic preference order prunes the
-        /// weakest incomparable candidate instead of permitting search-state
-        /// growth to become a compilation failure.
+        /// Retain distinct executables, including dominated ones that users
+        /// may force for measurement. Once full, preserve each target's best
+        /// candidate and evict the weakest remaining balanced candidate.
         pub fn insert(set: *Self, candidate: Candidate) void {
             for (set.candidates[0..set.count], 0..) |existing, index| {
                 if (sameExecutable(existing.?.executable, candidate.executable)) {
@@ -216,50 +233,93 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
                     }
                     return;
                 }
-                if (existing.?.cost.dominates(candidate.cost)) return;
-            }
-
-            var index: usize = 0;
-            while (index < set.count) {
-                if (candidate.cost.dominates(set.candidates[index].?.cost)) {
-                    var move = index;
-                    while (move + 1 < set.count) : (move += 1) set.candidates[move] = set.candidates[move + 1];
-                    set.count -= 1;
-                    set.candidates[set.count] = null;
-                } else {
-                    index += 1;
-                }
             }
 
             if (set.count == max_candidates) {
-                var worst_index: usize = 0;
-                for (1..set.count) |candidate_index| {
-                    if (set.candidates[worst_index].?.cost.preferredTo(set.candidates[candidate_index].?.cost)) {
+                var pool: [max_candidates + 1]?Candidate = undefined;
+                @memcpy(pool[0..max_candidates], &set.candidates);
+                pool[max_candidates] = candidate;
+                var protected: [max_candidates + 1]bool = @splat(false);
+                inline for (std.meta.tags(OptimizationTarget)) |target| {
+                    protected[bestOf(&pool, target)] = true;
+                }
+                const bounds = minima(&pool);
+                var worst_index: ?usize = null;
+                for (pool, 0..) |maybe_entry, candidate_index| {
+                    if (protected[candidate_index]) continue;
+                    if (worst_index == null or better(pool[worst_index.?].?, maybe_entry.?, .balanced, bounds)) {
                         worst_index = candidate_index;
                     }
                 }
-                if (candidate.cost.preferredTo(set.candidates[worst_index].?.cost)) {
-                    set.candidates[worst_index] = candidate;
-                }
+                if (worst_index.? != max_candidates) set.candidates[worst_index.?] = candidate;
                 return;
             }
             set.candidates[set.count] = candidate;
             set.count += 1;
         }
 
-        pub fn best(comptime set: Self) Candidate {
+        pub fn bestIndex(comptime set: Self, comptime target: OptimizationTarget) usize {
             if (set.count == 0) @compileError("executable search produced no candidates");
+            return bestOf(set.candidates[0..set.count], target);
+        }
+
+        fn bestOf(comptime entries: []const ?Candidate, comptime target: OptimizationTarget) usize {
+            const bounds = minima(entries);
             var best_index: usize = 0;
-            for (1..set.count) |index| {
-                const candidate = set.candidates[index].?;
-                const current = set.candidates[best_index].?;
-                if (candidate.cost.preferredTo(current.cost) or
-                    (costsEqual(candidate.cost, current.cost) and tieBreak(candidate, current)))
-                {
-                    best_index = index;
-                }
+            for (1..entries.len) |index| {
+                if (better(entries[index].?, entries[best_index].?, target, bounds)) best_index = index;
             }
-            return set.candidates[best_index].?;
+            return best_index;
+        }
+
+        const Minima = struct { work: u128, peak: usize, code: usize };
+
+        fn minima(comptime entries: []const ?Candidate) Minima {
+            var result: Minima = .{
+                .work = entries[0].?.cost.estimated_runtime_work,
+                .peak = entries[0].?.cost.peak_memory_bytes,
+                .code = entries[0].?.cost.code_size_units,
+            };
+            for (entries[1..]) |entry| {
+                result.work = @min(result.work, entry.?.cost.estimated_runtime_work);
+                result.peak = @min(result.peak, entry.?.cost.peak_memory_bytes);
+                result.code = @min(result.code, entry.?.cost.code_size_units);
+            }
+            return result;
+        }
+
+        fn balancedScore(cost: PlanCost, bounds: Minima) f64 {
+            return 3 * ratio(cost.estimated_runtime_work, bounds.work) +
+                ratio(cost.peak_memory_bytes, bounds.peak) +
+                ratio(cost.code_size_units, bounds.code);
+        }
+
+        fn ratio(value: anytype, baseline: @TypeOf(value)) f64 {
+            return @as(f64, @floatFromInt(value)) /
+                @as(f64, @floatFromInt(@max(baseline, 1)));
+        }
+
+        fn better(candidate: Candidate, current: Candidate, target: OptimizationTarget, bounds: Minima) bool {
+            switch (target) {
+                .balanced => {
+                    const candidate_score = balancedScore(candidate.cost, bounds);
+                    const current_score = balancedScore(current.cost, bounds);
+                    if (candidate_score != current_score) return candidate_score < current_score;
+                },
+                .memory => {
+                    if (candidate.cost.peak_memory_bytes != current.cost.peak_memory_bytes)
+                        return candidate.cost.peak_memory_bytes < current.cost.peak_memory_bytes;
+                    if (candidate.cost.scratch_memory_bytes != current.cost.scratch_memory_bytes)
+                        return candidate.cost.scratch_memory_bytes < current.cost.scratch_memory_bytes;
+                },
+                .fast => {},
+                .small => {
+                    if (candidate.cost.code_size_units != current.cost.code_size_units)
+                        return candidate.cost.code_size_units < current.cost.code_size_units;
+                },
+            }
+            if (candidate.cost.preferredTo(current.cost)) return true;
+            return costsEqual(candidate.cost, current.cost) and tieBreak(candidate, current);
         }
 
         fn costsEqual(lhs: PlanCost, rhs: PlanCost) bool {
@@ -324,8 +384,8 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
     };
 }
 
-/// Build a bounded set of complete executable programs, perform exact lifetime
-/// and storage planning for each, and retain their Pareto frontier.
+/// Build a bounded set of distinct executable programs and perform exact
+/// lifetime and storage planning for each.
 pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
     return struct {
         const Program = Executable(capacity, Execution.Op);
@@ -850,6 +910,9 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
         }
 
         fn locallyBetter(lhs: Representation, rhs: Representation) bool {
+            if (lhs.local_cost.estimated_runtime_delta != rhs.local_cost.estimated_runtime_delta) {
+                return lhs.local_cost.estimated_runtime_delta < rhs.local_cost.estimated_runtime_delta;
+            }
             if (lhs.local_cost.traffic_saved_bytes != rhs.local_cost.traffic_saved_bytes) {
                 return lhs.local_cost.traffic_saved_bytes > rhs.local_cost.traffic_saved_bytes;
             }
@@ -877,6 +940,11 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             const SourcePlan = Source.Plan(SourceKey, capacity, executable, source_configuration);
             const MemoryPlan = Storage.MemoryPlan(capacity, executable, lifetimes, SourcePlan);
             const memory_traffic = estimateMemoryTraffic(executable);
+            const arithmetic_work = estimateRuntime(executable);
+            const access_work = estimateAccess(executable);
+            const register_pressure_work = estimateRegisterPressure(executable);
+            const transfer_work = memoryTransferWork(memory_traffic);
+            const persistent_memory_bytes = persistentBytes(executable, lifetimes, SourcePlan);
 
             return .{
                 .executable = executable,
@@ -886,11 +954,15 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 .remap_regime = remap_regime,
                 .schedule = schedule,
                 .cost = .{
-                    .estimated_runtime_work = estimateRuntime(executable) + memoryTransferWork(memory_traffic),
+                    .estimated_runtime_work = arithmetic_work + access_work + register_pressure_work + transfer_work,
+                    .arithmetic_work = arithmetic_work,
+                    .access_work = access_work,
+                    .register_pressure_work = register_pressure_work,
+                    .transfer_work = transfer_work,
                     .memory_traffic = memory_traffic,
                     .peak_memory_bytes = MemoryPlan.byte_count,
-                    .persistent_memory_bytes = persistentBytes(executable, lifetimes, SourcePlan),
-                    .scratch_memory_bytes = 0,
+                    .persistent_memory_bytes = persistent_memory_bytes,
+                    .scratch_memory_bytes = MemoryPlan.byte_count - persistent_memory_bytes,
                     .code_size_units = codeSize(executable),
                 },
             };
@@ -903,6 +975,205 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 switch (node.op) {
                     .view => continue,
                     .compute => |compute| work += invocationArithmetic(program, node, compute),
+                }
+            }
+            return work;
+        }
+
+        fn estimateAccess(comptime program: Program) u128 {
+            var work: u128 = 0;
+            for (0..program.node_ct) |node_id| {
+                const node = program.nodes[node_id].?;
+                const compute = switch (node.op) {
+                    .view => continue,
+                    .compute => |value| value,
+                };
+                work += switch (compute) {
+                    .direct => |semantic| if (semantic == .matmul)
+                        contractionAccessWork(program, node, .scalar)
+                    else
+                        directAccessWork(program, node),
+                    .kernel => |kernel| switch (kernel) {
+                        .map => |plan| mapAccessWork(program, node, plan),
+                        .reduction => |plan| reductionAccessWork(program, node, plan),
+                        .contraction => |plan| contractionAccessWork(program, node, plan.strategy),
+                    },
+                };
+            }
+            return work;
+        }
+
+        fn directAccessWork(comptime program: Program, comptime node: Program.Invocation) u128 {
+            if (node.output_count == 0) return 0;
+            const output = program.tensors[program.output_refs[node.output_start].?].?;
+            const width = if (directElementwiseVectorizes(program, node, output))
+                (std.simd.suggestVectorLength(output.dtype.Scalar()) orelse 1)
+            else
+                1;
+            const steps = vectorSteps(output.shape.elementCount(), width);
+            const axis = if (output.shape.rank == 0) 0 else output.shape.rank - 1;
+            var work = steps * strideFactor(if (output.shape.rank == 0) 1 else output.layout.strides[axis]);
+            for (0..node.input_count) |index| {
+                const input = program.tensors[program.input_refs[node.input_start + index].?].?;
+                work += steps * strideFactor(broadcastStrideForAxis(input, output.shape.slice(), axis));
+            }
+            return work;
+        }
+
+        fn mapAccessWork(comptime program: Program, comptime node: Program.Invocation, comptime plan: Execution.MapPlan) u128 {
+            return switch (plan.strategy) {
+                .traversal => |traversal| blk: {
+                    const shape = plan.region.domain.shape;
+                    const axis = if (traversal.axis_order.len == 0) 0 else traversal.axis_order[traversal.axis_order.len - 1];
+                    const width = if (traversal.vector_axis != null) traversal.vector_width else 1;
+                    const steps = domainSteps(shape, traversal.vector_axis, width);
+                    const output = program.tensors[program.output_refs[node.output_start].?].?;
+                    var work = steps * strideFactor(if (shape.len == 0) 1 else output.layout.strides[axis]);
+                    for (0..node.input_count) |index| {
+                        const input = program.tensors[program.input_refs[node.input_start + index].?].?;
+                        work += steps * strideFactor(broadcastStrideForAxis(input, shape, axis));
+                    }
+                    break :blk work;
+                },
+                .segmented => |segmented| blk: {
+                    var work: u128 = segmented.segments.len * 4;
+                    for (segmented.segments) |segment| {
+                        const width = switch (plan.region.body) {
+                            .expression_transfer => |expression| if (expressionSegmentVectorizes(program, node, expression, segment, segmented.vector_width))
+                                segmented.vector_width
+                            else
+                                1,
+                            .transfer => if (segmentIsContiguous(segment)) segmented.vector_width else 1,
+                            .expression => unreachable,
+                        };
+                        const steps = vectorSteps(segment.elementCount(), width);
+                        const axis = if (segment.rank == 0) 0 else segment.rank - 1;
+                        work += steps * strideFactor(if (segment.rank == 0) 1 else segment.source_strides[axis]);
+                        work += steps * strideFactor(if (segment.rank == 0) 1 else segment.destination_strides[axis]);
+                    }
+                    break :blk work;
+                },
+                .loop => |loop_plan| blk: {
+                    const elements = product(plan.region.domain.shape);
+                    const steps = vectorSteps(elements, loop_plan.vector_width);
+                    break :blk steps * (node.input_count + 1) + @as(u128, elements) * 2;
+                },
+            };
+        }
+
+        fn reductionAccessWork(comptime program: Program, comptime node: Program.Invocation, comptime plan: Execution.ReductionPlan) u128 {
+            const shape = plan.region.domain.shape;
+            const axis = plan.traversal_plan.vector_axis orelse if (plan.traversal_plan.reduction_axis_order.len != 0)
+                plan.traversal_plan.reduction_axis_order[plan.traversal_plan.reduction_axis_order.len - 1]
+            else
+                @as(u8, @intCast(shape.len - 1));
+            const steps = domainSteps(shape, plan.traversal_plan.vector_axis, plan.traversal_plan.vector_width);
+            var work: u128 = 0;
+            for (0..node.input_count) |index| {
+                const input = program.tensors[program.input_refs[node.input_start + index].?].?;
+                work += steps * strideFactor(broadcastStrideForAxis(input, shape, axis));
+            }
+            for (0..node.output_count) |index| {
+                const output = program.tensors[program.output_refs[node.output_start + index].?].?;
+                work += output.shape.elementCount();
+            }
+            return work;
+        }
+
+        fn contractionAccessWork(comptime program: Program, comptime node: Program.Invocation, comptime strategy: Execution.ContractionPlan.Strategy) u128 {
+            const lhs = program.tensors[program.input_refs[node.input_start].?].?;
+            const rhs = program.tensors[program.input_refs[node.input_start + 1].?].?;
+            const output = program.tensors[program.output_refs[node.output_start].?].?;
+            const m: u128 = lhs.shape.at(0);
+            const k: u128 = lhs.shape.at(1);
+            const n: u128 = rhs.shape.at(1);
+            const width = std.simd.suggestVectorLength(lhs.dtype.Scalar()) orelse 1;
+            return switch (strategy) {
+                .output_columns => blk: {
+                    const columns = vectorSteps(rhs.shape.at(1), width);
+                    break :blk m * k * columns * (strideFactor(lhs.layout.strides[1]) + 1) +
+                        m * columns * strideFactor(output.layout.strides[1]);
+                },
+                .contracted_axis => blk: {
+                    const contracted = vectorSteps(lhs.shape.at(1), width);
+                    break :blk m * n * contracted * 2 +
+                        m * n * strideFactor(output.layout.strides[1]);
+                },
+                .output_rows => blk: {
+                    const rows = vectorSteps(lhs.shape.at(0), width);
+                    break :blk n * k * rows * (1 + strideFactor(rhs.layout.strides[0])) +
+                        n * rows * strideFactor(output.layout.strides[0]);
+                },
+                .scalar => m * n * k * (strideFactor(lhs.layout.strides[1]) + strideFactor(rhs.layout.strides[0])) +
+                    m * n * strideFactor(output.layout.strides[1]),
+            };
+        }
+
+        fn broadcastStrideForAxis(comptime input: Program.TensorInfo, comptime shape: []const usize, comptime axis: usize) isize {
+            if (input.shape.rank == 0) return 0;
+            if (input.shape.rank > shape.len) return input.layout.strides[input.shape.rank - 1];
+            if (shape.len == 0 or axis < shape.len - input.shape.rank) return 0;
+            const input_axis = axis - (shape.len - input.shape.rank);
+            if (input.shape.at(input_axis) == 1 and shape[axis] != 1) return 0;
+            return input.layout.strides[input_axis];
+        }
+
+        fn strideFactor(comptime stride: isize) u128 {
+            return if (stride == 0 or stride == 1) 1 else 3;
+        }
+
+        fn estimateRegisterPressure(comptime program: Program) u128 {
+            var work: u128 = 0;
+            for (0..program.node_ct) |node_id| {
+                const node = program.nodes[node_id].?;
+                const compute = switch (node.op) {
+                    .view => continue,
+                    .compute => |value| value,
+                };
+                const kernel = switch (compute) {
+                    .direct => continue,
+                    .kernel => |value| value,
+                };
+                switch (kernel) {
+                    .map => |plan| {
+                        const expression = switch (plan.region.body) {
+                            .expression, .expression_transfer => |value| value,
+                            .transfer => continue,
+                        };
+                        const demand = Analysis.Cost.peakLiveValues(expression) +
+                            Analysis.Cost.maxArity(expression) + @min(node.input_count, 3) + 1;
+                        switch (plan.strategy) {
+                            .traversal => |traversal| {
+                                const width = if (traversal.vector_axis != null) traversal.vector_width else 1;
+                                const steps = domainSteps(plan.region.domain.shape, traversal.vector_axis, width);
+                                work += Analysis.Cost.registerPressureWork(steps, width, demand);
+                            },
+                            .segmented => |segmented| {
+                                for (segmented.segments) |segment| {
+                                    const width = if (expressionSegmentVectorizes(program, node, expression, segment, segmented.vector_width))
+                                        segmented.vector_width
+                                    else
+                                        1;
+                                    const steps = vectorSteps(segment.elementCount(), width);
+                                    work += Analysis.Cost.registerPressureWork(steps, width, demand);
+                                }
+                            },
+                            .loop => |loop_plan| {
+                                const steps = vectorSteps(product(plan.region.domain.shape), loop_plan.vector_width);
+                                work += Analysis.Cost.registerPressureWork(steps, loop_plan.vector_width, demand);
+                            },
+                        }
+                    },
+                    .reduction => |plan| {
+                        const expression = plan.region.expressions;
+                        const width = plan.traversal_plan.vector_width;
+                        const accumulator_demand = plan.region.accumulators.len * (if (width > 1) @as(usize, 2) else 1);
+                        const demand = Analysis.Cost.peakLiveValues(expression) +
+                            Analysis.Cost.maxArity(expression) + @min(node.input_count, 3) + accumulator_demand;
+                        const steps = domainSteps(plan.region.domain.shape, plan.traversal_plan.vector_axis, width);
+                        work += Analysis.Cost.registerPressureWork(steps, width, demand);
+                    },
+                    .contraction => {},
                 }
             }
             return work;

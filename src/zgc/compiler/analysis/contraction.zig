@@ -13,10 +13,17 @@ pub fn estimateWork(lhs: anytype, rhs: anytype, strategy: Contraction.Plan.Strat
     const k = lhs.shape.at(1);
     const n = rhs.shape.at(1);
     const width = std.simd.suggestVectorLength(lhs.dtype.Scalar()) orelse 1;
+    const column_broadcasts = if (width > 1) n / width else 0;
+    const row_broadcasts = if (width > 1) m / width else 0;
     return switch (strategy) {
-        .output_columns => @as(u128, m) * k * vectorSteps(n, width) * 2,
-        .contracted_axis => @as(u128, m) * n * vectorSteps(k, width) * 2,
-        .output_rows => @as(u128, n) * k * vectorSteps(m, width) * 2,
+        // Each full vector step also broadcasts a scalar from the other input.
+        .output_columns => @as(u128, m) * k *
+            (vectorSteps(n, width) * 2 + column_broadcasts),
+        // This kernel reduces a vector accumulator once per output. Keep the
+        // lane-width charge for the cross-lane reduction and scalar tail.
+        .contracted_axis => @as(u128, m) * n * (vectorSteps(k, width) * 2 + width),
+        .output_rows => @as(u128, n) * k *
+            (vectorSteps(m, width) * 2 + row_broadcasts),
         .scalar => @as(u128, m) * k * n * 2,
     };
 }
