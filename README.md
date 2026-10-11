@@ -120,6 +120,30 @@ pub fn main() !void {
 }
 ```
 
+## Executable selection
+
+`modelWithOptions` chooses from the compiler's retained executable frontier at
+compile time. The default target is `balanced`:
+
+```zig
+const FastModel = definition.modelWithOptions(.{ .target = .fast });
+const MemoryModel = definition.modelWithOptions(.{ .target = .memory });
+const SmallModel = definition.modelWithOptions(.{ .target = .small });
+const ForcedModel = definition.modelWithOptions(.{ .frontier_index = 0 });
+```
+
+`fast` minimizes estimated runtime work, `memory` minimizes planned peak model
+buffer space, and `small` minimizes estimated generated-code units. `balanced`
+combines runtime, peak memory, and code-size ratios with a 3:1:1 weighting.
+These are compile-time estimates; `small` does not measure the linked binary.
+An explicit `frontier_index` overrides the target and fails compilation if the
+index is outside the retained frontier. Inspect
+`Model.executable_candidate_frontier` and
+`Model.selected_executable_candidate_index` to choose an index. The frontier
+retains distinct implementations for explicit selection, including some that
+lose on every current cost metric, and holds at most 16 candidates. Source
+bindings can be supplied in the same options value with `.sources = &.{...}`.
+
 ## Key capabilities
 
 - Front-facing `DefinitionBuilder` with enum-indexed sources composes graphs.
@@ -140,6 +164,7 @@ pub fn main() !void {
 - Graph-level fusion and traversal planning across compatible operations.
 - Compile-time layout and execution-plan selection.
 - Search-based compilation pipeline, and influencable concrete executables.
+- Retained executable plans that can be selected for lowering at compile-time.
 - Core-backed extensions and abstractions like `nn` and `img`.
 - Operation and generated-model benchmarks, plus standalone example packages.
 - Lean binaries and first-class inspection for any compiled tensor graph.

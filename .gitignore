@@ -13,10 +13,10 @@ playground
 bindings_test
 bindings
 
+benchmarks/results.json
+benchmarks/regret.json
+benchmarks/report-regret.py
+
 # Local fluid solver performance comparisons
-/examples/fluid-dynamics/src/lbm-benchmark.zig
-/examples/fluid-dynamics/src/lbm-fluid-benchmark.zig
 /examples/fluid-dynamics/src/lbm-direct.zig
-/examples/fluid-dynamics/src/lbm-compare.zig
-/examples/fluid-dynamics/src/lbm-model-legacy.zig
 notes.md

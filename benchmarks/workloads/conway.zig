@@ -30,7 +30,7 @@ const Model = model: {
         builder.equal(neighbor_count, three),
         builder.logicalAnd(world, builder.equal(neighbor_count, two)),
     ));
-    break :model builder.finish().modelWith(&.{.{
+    break :model @import("benchmark_selection").model(builder.finish(), &.{.{
         .source = .world,
         .binding = zgc.memory.Source.bound,
     }});
