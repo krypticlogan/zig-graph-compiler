@@ -12,6 +12,16 @@ pub inline fn evaluateAt(
     comptime shape: anytype,
     coordinates: [shape.len]usize,
 ) ReferenceType(program, @TypeOf(inputs), result) {
+    const values = evaluateValuesAt(program, inputs, shape, coordinates);
+    return resolve(program, result, inputs, &values, shape, coordinates);
+}
+
+pub inline fn evaluateValuesAt(
+    comptime program: Program,
+    inputs: anytype,
+    comptime shape: anytype,
+    coordinates: [shape.len]usize,
+) Values(program) {
     var values: Values(program) = undefined;
     inline for (program.instructions, 0..) |instruction, instruction_index| {
         var params: Params(program, @TypeOf(inputs), instruction) = undefined;
@@ -20,7 +30,11 @@ pub inline fn evaluateAt(
         }
         values[instruction_index] = elementwise.evaluateScalar(instruction.dtype, instruction.operation, params);
     }
-    return resolve(program, result, inputs, &values, shape, coordinates);
+    return values;
+}
+
+pub inline fn resolveAt(comptime program: Program, comptime result: Program.ValueRef, inputs: anytype, values: anytype, comptime shape: anytype, coordinates: [shape.len]usize) ReferenceType(program, @TypeOf(inputs), result) {
+    return resolve(program, result, inputs, values, shape, coordinates);
 }
 
 /// Evaluate a vector of adjacent values along one logical domain axis. Input
@@ -34,6 +48,18 @@ pub inline fn evaluateVectorAt(
     comptime vector_axis: usize,
     comptime vector_width: usize,
 ) VectorReferenceType(program, @TypeOf(inputs), result, vector_width) {
+    const values = evaluateVectorValuesAt(program, inputs, shape, coordinates, vector_axis, vector_width);
+    return resolveVector(program, result, inputs, &values, shape, coordinates, vector_axis, vector_width);
+}
+
+pub inline fn evaluateVectorValuesAt(
+    comptime program: Program,
+    inputs: anytype,
+    comptime shape: anytype,
+    coordinates: [shape.len]usize,
+    comptime vector_axis: usize,
+    comptime vector_width: usize,
+) VectorValues(program, vector_width) {
     var values: VectorValues(program, vector_width) = undefined;
     inline for (program.instructions, 0..) |instruction, instruction_index| {
         var params: VectorParams(program, @TypeOf(inputs), instruction, vector_width) = undefined;
@@ -56,16 +82,11 @@ pub inline fn evaluateVectorAt(
             params,
         );
     }
-    return resolveVector(
-        program,
-        result,
-        inputs,
-        &values,
-        shape,
-        coordinates,
-        vector_axis,
-        vector_width,
-    );
+    return values;
+}
+
+pub inline fn resolveVectorAt(comptime program: Program, comptime result: Program.ValueRef, inputs: anytype, values: anytype, comptime shape: anytype, coordinates: [shape.len]usize, comptime vector_axis: usize, comptime vector_width: usize) VectorReferenceType(program, @TypeOf(inputs), result, vector_width) {
+    return resolveVector(program, result, inputs, values, shape, coordinates, vector_axis, vector_width);
 }
 
 pub inline fn coordinatesFromLinear(comptime shape: anytype, linear_index: usize) [shape.len]usize {

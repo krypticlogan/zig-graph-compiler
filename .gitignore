@@ -16,7 +16,7 @@ bindings
 benchmarks/results.json
 benchmarks/regret.json
 benchmarks/report-regret.py
-
+local_notes.md
 # Local fluid solver performance comparisons
 /examples/fluid-dynamics/src/lbm-direct.zig
 notes.md

@@ -2,8 +2,7 @@ const std = @import("std");
 const accumulation = @import("../accumulation.zig");
 const Dtype = @import("../../storage/dtype.zig").Dtype;
 const ReductionPlan = @import("../../execution/execution.zig").ReductionPlan;
-const Expression = @import("../../compiler/optimization/fusion/expression.zig").Program;
-const elementwise = @import("../elementwise_operation.zig");
+const evaluation = @import("../map/evaluation.zig");
 
 /// Execute one statically planned multi-accumulator reduction region.
 pub fn execute(comptime plan: ReductionPlan, inputs: anytype, outputs: anytype) void {
@@ -25,6 +24,7 @@ fn executeScalar(comptime plan: ReductionPlan, inputs: anytype, outputs: anytype
 
     for (0..outputs[0].len()) |output_linear| {
         var accumulators: [plan.region.accumulators.len]Accumulator = undefined;
+        var included_counts: [plan.region.accumulators.len]usize = @splat(0);
         inline for (plan.region.accumulators, 0..) |accumulator, index| {
             accumulators[index] = accumulation.identity(dtype, accumulator.combine);
         }
@@ -36,27 +36,22 @@ fn executeScalar(comptime plan: ReductionPlan, inputs: anytype, outputs: anytype
                 output_linear,
                 reduction_linear,
             );
-            const values = evaluateScalar(plan, inputs, coordinates);
+            const values = evaluation.evaluateValuesAt(plan.region.expressions, inputs, domain_shape, coordinates);
             inline for (plan.region.accumulators, 0..) |accumulator, accumulator_index| {
-                const value = resolveScalar(
-                    dtype,
-                    rank,
-                    domain_shape,
-                    accumulator.update,
-                    inputs,
-                    &values,
-                    coordinates,
-                );
-                accumulators[accumulator_index] = accumulation.combine(
-                    dtype,
-                    accumulator.combine,
-                    accumulators[accumulator_index],
-                    value,
-                );
+                const selected = selectedScalar(plan, dtype, accumulator, inputs, &values, coordinates);
+                if (selected.include) {
+                    included_counts[accumulator_index] += 1;
+                    accumulators[accumulator_index] = accumulation.combine(
+                        dtype,
+                        accumulator.combine,
+                        accumulators[accumulator_index],
+                        selected.value,
+                    );
+                }
             }
         }
 
-        storeResults(plan, outputs, output_linear, accumulators, reduction_count);
+        storeResults(plan, outputs, output_linear, accumulators, included_counts);
     }
 }
 
@@ -76,6 +71,7 @@ fn executeVectorized(comptime plan: ReductionPlan, inputs: anytype, outputs: any
     for (0..outputs[0].len()) |output_linear| {
         var scalar_accumulators: [plan.region.accumulators.len]Accumulator = undefined;
         var vector_accumulators: [plan.region.accumulators.len]VectorAccumulator = undefined;
+        var included_counts: [plan.region.accumulators.len]usize = @splat(0);
         inline for (plan.region.accumulators, 0..) |accumulator, index| {
             const identity = accumulation.identity(dtype, accumulator.combine);
             scalar_accumulators[index] = identity;
@@ -93,19 +89,11 @@ fn executeVectorized(comptime plan: ReductionPlan, inputs: anytype, outputs: any
             var vector_index: usize = 0;
             while (vector_index + vector_width <= vector_axis_extent) : (vector_index += vector_width) {
                 coordinates[vector_axis] = vector_index;
-                const values = evaluateVector(plan, inputs, coordinates);
+                const values = evaluation.evaluateVectorValuesAt(plan.region.expressions, inputs, domain_shape, coordinates, vector_axis, vector_width);
                 inline for (plan.region.accumulators, 0..) |accumulator, accumulator_index| {
-                    const value = resolveVector(
-                        dtype,
-                        rank,
-                        domain_shape,
-                        vector_axis,
-                        vector_width,
-                        accumulator.update,
-                        inputs,
-                        &values,
-                        coordinates,
-                    );
+                    const selected = selectedVector(plan, dtype, accumulator, inputs, &values, coordinates);
+                    const value = selected.value;
+                    included_counts[accumulator_index] += @reduce(.Add, @select(usize, selected.include, @as(@Vector(vector_width, usize), @splat(1)), @as(@Vector(vector_width, usize), @splat(0))));
                     vector_accumulators[accumulator_index] = accumulation.combineVector(
                         dtype,
                         vector_width,
@@ -118,23 +106,18 @@ fn executeVectorized(comptime plan: ReductionPlan, inputs: anytype, outputs: any
 
             while (vector_index < vector_axis_extent) : (vector_index += 1) {
                 coordinates[vector_axis] = vector_index;
-                const values = evaluateScalar(plan, inputs, coordinates);
+                const values = evaluation.evaluateValuesAt(plan.region.expressions, inputs, domain_shape, coordinates);
                 inline for (plan.region.accumulators, 0..) |accumulator, accumulator_index| {
-                    const value = resolveScalar(
-                        dtype,
-                        rank,
-                        domain_shape,
-                        accumulator.update,
-                        inputs,
-                        &values,
-                        coordinates,
-                    );
-                    scalar_accumulators[accumulator_index] = accumulation.combine(
-                        dtype,
-                        accumulator.combine,
-                        scalar_accumulators[accumulator_index],
-                        value,
-                    );
+                    const selected = selectedScalar(plan, dtype, accumulator, inputs, &values, coordinates);
+                    if (selected.include) {
+                        included_counts[accumulator_index] += 1;
+                        scalar_accumulators[accumulator_index] = accumulation.combine(
+                            dtype,
+                            accumulator.combine,
+                            scalar_accumulators[accumulator_index],
+                            selected.value,
+                        );
+                    }
                 }
             }
         }
@@ -152,58 +135,56 @@ fn executeVectorized(comptime plan: ReductionPlan, inputs: anytype, outputs: any
                 ),
             );
         }
-        storeResults(plan, outputs, output_linear, scalar_accumulators, reduction_count);
+        storeResults(plan, outputs, output_linear, scalar_accumulators, included_counts);
     }
 }
 
-inline fn evaluateScalar(
+inline fn selectedScalar(
     comptime plan: ReductionPlan,
+    comptime dtype: Dtype,
+    comptime accumulator: @import("../../compiler/optimization/regions/root.zig").Reduction.Accumulator,
     inputs: anytype,
+    values: anytype,
     coordinates: anytype,
-) [plan.region.expressions.instructions.len]@TypeOf(inputs[0]).dtype.Scalar() {
-    const dtype = @TypeOf(inputs[0]).dtype;
+) struct { value: dtype.Scalar(), include: bool } {
     const rank = plan.region.domain.shape.len;
     const domain_shape: [rank]usize = plan.region.domain.shape[0..rank].*;
-    var values: [plan.region.expressions.instructions.len]dtype.Scalar() = undefined;
-    inline for (plan.region.expressions.instructions, 0..) |instruction, instruction_index| {
-        var params: [instruction.operation.arity()]dtype.Scalar() = undefined;
-        inline for (instruction.args[0..params.len], 0..) |reference, param_index| {
-            params[param_index] = resolveScalar(dtype, rank, domain_shape, reference, inputs, &values, coordinates);
-        }
-        values[instruction_index] = elementwise.evaluateScalar(dtype, instruction.operation, params);
-    }
-    return values;
+    const update = evaluation.resolveAt(plan.region.expressions, accumulator.update, inputs, values, domain_shape, coordinates);
+    return switch (accumulator.selection) {
+        .none => .{ .value = update, .include = true },
+        .masked => |mask| .{
+            .value = update,
+            .include = evaluation.resolveAt(plan.region.expressions, mask.condition, inputs, values, domain_shape, coordinates) == mask.include_when_true,
+        },
+    };
 }
 
-inline fn evaluateVector(
+inline fn selectedVector(
     comptime plan: ReductionPlan,
+    comptime dtype: Dtype,
+    comptime accumulator: @import("../../compiler/optimization/regions/root.zig").Reduction.Accumulator,
     inputs: anytype,
+    values: anytype,
     coordinates: anytype,
-) [plan.region.expressions.instructions.len]@TypeOf(inputs[0]).dtype.Vector(plan.traversal_plan.vector_width) {
-    const dtype = @TypeOf(inputs[0]).dtype;
+) struct { value: dtype.Vector(plan.traversal_plan.vector_width), include: @Vector(plan.traversal_plan.vector_width, bool) } {
     const rank = plan.region.domain.shape.len;
     const domain_shape: [rank]usize = plan.region.domain.shape[0..rank].*;
-    const vector_axis: usize = plan.traversal_plan.vector_axis.?;
-    const vector_width = plan.traversal_plan.vector_width;
-    var values: [plan.region.expressions.instructions.len]dtype.Vector(vector_width) = undefined;
-    inline for (plan.region.expressions.instructions, 0..) |instruction, instruction_index| {
-        var params: [instruction.operation.arity()]dtype.Vector(vector_width) = undefined;
-        inline for (instruction.args[0..params.len], 0..) |reference, param_index| {
-            params[param_index] = resolveVector(
-                dtype,
-                rank,
-                domain_shape,
-                vector_axis,
-                vector_width,
-                reference,
-                inputs,
-                &values,
-                coordinates,
-            );
-        }
-        values[instruction_index] = elementwise.evaluate(dtype, vector_width, instruction.operation, params);
-    }
-    return values;
+    const axis: usize = plan.traversal_plan.vector_axis.?;
+    const width = plan.traversal_plan.vector_width;
+    const update = evaluation.resolveVectorAt(plan.region.expressions, accumulator.update, inputs, values, domain_shape, coordinates, axis, width);
+    return switch (accumulator.selection) {
+        .none => .{ .value = update, .include = @splat(true) },
+        .masked => |mask| blk: {
+            const predicate = evaluation.resolveVectorAt(plan.region.expressions, mask.condition, inputs, values, domain_shape, coordinates, axis, width);
+            const include = if (mask.include_when_true) predicate else !predicate;
+            const identity: dtype.Scalar() = switch (accumulator.combine) {
+                .sum => 0,
+                .minimum => if (comptime dtype.kind() == .float) std.math.inf(dtype.Scalar()) else std.math.maxInt(dtype.Scalar()),
+                .maximum => if (comptime dtype.kind() == .float) -std.math.inf(dtype.Scalar()) else std.math.minInt(dtype.Scalar()),
+            };
+            break :blk .{ .value = @select(dtype.Scalar(), include, update, @as(dtype.Vector(width), @splat(identity))), .include = include };
+        },
+    };
 }
 
 inline fn storeResults(
@@ -211,7 +192,7 @@ inline fn storeResults(
     outputs: anytype,
     output_linear: usize,
     accumulators: anytype,
-    reduction_count: usize,
+    included_counts: anytype,
 ) void {
     const dtype = @TypeOf(outputs[0]).dtype;
     inline for (plan.region.stores) |store| {
@@ -224,57 +205,10 @@ inline fn storeResults(
             dtype,
             accumulator.finalize,
             accumulators[accumulator_index],
-            reduction_count,
+            included_counts[accumulator_index],
         );
         outputs[store.output].storage[outputs[store.output].elementOffsetFromLinear(output_linear)] = value;
     }
-}
-
-inline fn resolveScalar(
-    comptime dtype: Dtype,
-    comptime rank: usize,
-    comptime domain_shape: [rank]usize,
-    comptime reference: Expression.ValueRef,
-    inputs: anytype,
-    values: anytype,
-    coordinates: [rank]usize,
-) dtype.Scalar() {
-    return switch (reference) {
-        .input => |input_index| blk: {
-            const view = inputs[input_index].broadcastTo(rank, domain_shape);
-            break :blk view.storage[view.elementOffset(coordinates)];
-        },
-        .instruction => |instruction_index| values[instruction_index],
-        .accumulator => @compileError("reduction body expressions cannot read accumulators"),
-    };
-}
-
-inline fn resolveVector(
-    comptime dtype: Dtype,
-    comptime rank: usize,
-    comptime domain_shape: [rank]usize,
-    comptime vector_axis: usize,
-    comptime vector_width: usize,
-    comptime reference: Expression.ValueRef,
-    inputs: anytype,
-    values: anytype,
-    coordinates: [rank]usize,
-) dtype.Vector(vector_width) {
-    return switch (reference) {
-        .input => |input_index| blk: {
-            const view = inputs[input_index].broadcastTo(rank, domain_shape);
-            const offset = view.elementOffset(coordinates);
-            if (comptime @TypeOf(view).static_strides[vector_axis] == 0) {
-                break :blk @splat(view.storage[offset]);
-            }
-            if (comptime @TypeOf(view).static_strides[vector_axis] != 1) {
-                @compileError("reduction SIMD input must be contiguous or broadcast on its vector axis");
-            }
-            break :blk view.storage[offset..][0..vector_width].*;
-        },
-        .instruction => |instruction_index| values[instruction_index],
-        .accumulator => @compileError("reduction body expressions cannot read accumulators"),
-    };
 }
 
 fn reducedElementCount(comptime shape: anytype, comptime axes: u64) usize {

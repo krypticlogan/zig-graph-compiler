@@ -419,7 +419,7 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
             const dtype = outputs[0].dtype;
             if (dtype.kind() == .boolean) @compileError("reduction plans require a numeric dtype");
             for (inputs) |input| {
-                if (input.dtype != dtype) @compileError("reduction expression inputs must match the output dtype");
+                if (input.dtype != dtype and input.dtype != .bool) @compileError("reduction expression inputs must be numeric values or boolean predicates");
                 if (!broadcastsToShape(input, region.domain.shape)) {
                     @compileError("reduction expression input does not broadcast to the reduction domain");
                 }
@@ -431,7 +431,7 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
                 }
             }
 
-            validateReductionExpressions(region.expressions, inputs.len, dtype);
+            validateReductionExpressions(region.expressions, inputs);
 
             for (region.accumulators) |accumulator| {
                 validateReductionValueRef(
@@ -440,6 +440,11 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
                     region.expressions.instructions.len,
                     0,
                 );
+                validateReductionReferenceDtype(accumulator.update, region.expressions, inputs, dtype);
+                switch (accumulator.selection) {
+                    .none => {},
+                    .masked => |mask| validateReductionPredicate(mask.condition, region.expressions, inputs),
+                }
                 if (accumulator.finalize == .mean and dtype.kind() != .float) {
                     @compileError("mean reduction finalization requires a floating-point dtype");
                 }
@@ -506,20 +511,38 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
 
         fn validateReductionExpressions(
             comptime program: fusion.Program,
-            comptime input_count: usize,
-            comptime dtype: @import("../storage/dtype.zig").Dtype,
+            comptime inputs: anytype,
         ) void {
             for (program.instructions, 0..) |instruction, instruction_index| {
-                if (instruction.dtype != dtype) {
-                    @compileError("reduction expression instruction dtype must match the reduction dtype");
+                var operand_dtypes: [instruction.operation.arity()]@import("../storage/dtype.zig").Dtype = undefined;
+                for (instruction.args[0..instruction.operation.arity()], 0..) |reference, operand_index| {
+                    validateReductionValueRef(reference, inputs.len, instruction_index, 0);
+                    operand_dtypes[operand_index] = reductionReferenceDtype(reference, program, inputs);
                 }
-                if (!instruction.operation.acceptsDtype(dtype)) {
-                    @compileError("reduction expression instruction does not accept the reduction dtype");
-                }
-                for (instruction.args[0..instruction.operation.arity()]) |reference| {
-                    validateReductionValueRef(reference, input_count, instruction_index, 0);
+                if (!instruction.operation.acceptsOperands(&operand_dtypes) or
+                    instruction.dtype != instruction.operation.inferDtype(&operand_dtypes))
+                {
+                    @compileError("reduction expression instruction has invalid operand or result dtypes");
                 }
             }
+        }
+
+        fn reductionReferenceDtype(comptime reference: fusion.Program.ValueRef, comptime program: fusion.Program, comptime inputs: anytype) @import("../storage/dtype.zig").Dtype {
+            return switch (reference) {
+                .input => |index| inputs[index].dtype,
+                .instruction => |index| program.instructions[index].dtype,
+                .accumulator => @compileError("reduction expressions cannot read accumulators"),
+            };
+        }
+
+        fn validateReductionReferenceDtype(comptime reference: fusion.Program.ValueRef, comptime program: fusion.Program, comptime inputs: anytype, comptime dtype: @import("../storage/dtype.zig").Dtype) void {
+            validateReductionValueRef(reference, inputs.len, program.instructions.len, 0);
+            if (reductionReferenceDtype(reference, program, inputs) != dtype) @compileError("reduction update dtype must match the output dtype");
+        }
+
+        fn validateReductionPredicate(comptime reference: fusion.Program.ValueRef, comptime program: fusion.Program, comptime inputs: anytype) void {
+            validateReductionValueRef(reference, inputs.len, program.instructions.len, 0);
+            if (reductionReferenceDtype(reference, program, inputs) != .bool) @compileError("reduction selection condition must be boolean");
         }
 
         fn validateReductionValueRef(

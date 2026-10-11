@@ -102,15 +102,44 @@ pub fn Planner(comptime capacity: Graph.Capacity) type {
                 const descriptor = Reduction.fromCompute(node.op.compute).?;
                 const input_id = graph.input_refs[node.input_start].?;
                 const accumulator_index = built.accumulator_count;
-                built.accumulators[accumulator_index] = .{
+                var accumulator: Region.Reduction.Accumulator = .{
                     .combine = switch (descriptor.kind) {
                         .sum, .mean => .sum,
                         .minimum => .minimum,
                         .maximum => .maximum,
                     },
-                    .update = ExpressionBuilder.buildValue(graph, group.nodes, input_id, &built),
+                    .update = undefined,
                     .finalize = if (descriptor.kind == .mean) .mean else .identity,
                 };
+                const producer_id: ?usize = switch (graph.tensors[input_id].?.origin) {
+                    .node => |id| id,
+                    else => null,
+                };
+                if (producer_id) |where_id| {
+                    if (group.nodes[where_id] and graph.nodes[where_id].?.op == .compute and
+                        graph.nodes[where_id].?.op.compute == .where)
+                    {
+                        const where_node = graph.nodes[where_id].?;
+                        const condition_id = graph.input_refs[where_node.input_start].?;
+                        const true_id = graph.input_refs[where_node.input_start + 1].?;
+                        const false_id = graph.input_refs[where_node.input_start + 2].?;
+                        const condition = ExpressionBuilder.buildValue(graph, group.nodes, condition_id, &built);
+                        if (isLiteralZero(graph, false_id)) {
+                            accumulator.update = ExpressionBuilder.buildValue(graph, group.nodes, true_id, &built);
+                            accumulator.selection = .{ .masked = .{ .condition = condition, .include_when_true = true } };
+                        } else if (isLiteralZero(graph, true_id)) {
+                            accumulator.update = ExpressionBuilder.buildValue(graph, group.nodes, false_id, &built);
+                            accumulator.selection = .{ .masked = .{ .condition = condition, .include_when_true = false } };
+                        } else {
+                            accumulator.update = ExpressionBuilder.buildValue(graph, group.nodes, input_id, &built);
+                        }
+                    } else {
+                        accumulator.update = ExpressionBuilder.buildValue(graph, group.nodes, input_id, &built);
+                    }
+                } else {
+                    accumulator.update = ExpressionBuilder.buildValue(graph, group.nodes, input_id, &built);
+                }
+                built.accumulators[accumulator_index] = accumulator;
                 built.accumulator_count += 1;
                 built.outputs[built.output_count] = node.result;
                 built.output_count += 1;
@@ -122,6 +151,13 @@ pub fn Planner(comptime capacity: Graph.Capacity) type {
             }
             chooseReductionVectorization(graph, domain, &built);
             return built;
+        }
+
+        fn isLiteralZero(comptime graph: anytype, comptime tensor_id: usize) bool {
+            return switch (graph.tensors[tensor_id].?.origin) {
+                .literal => |value| value.bits == 0,
+                else => false,
+            };
         }
 
         fn chooseReductionVectorization(comptime graph: anytype, comptime domain: anytype, built: anytype) void {

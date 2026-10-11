@@ -524,26 +524,31 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             result.contraction_candidate_count = contraction_candidates.count;
             result.generated_contraction_strategies = @splat(false);
 
+            const masked_fusion_required = comptime requiresMaskedFusion(SemanticValidated.graph, semantic_analysis);
+
             const reference_schedules = Scheduling.Scheduling(capacity).enumerate(SemanticValidated.graph);
-            inline for (reference_schedules, 0..) |schedule, schedule_index| {
-                const executable = Scheduling.Reference(capacity).plan(SemanticValidated.graph, schedule);
-                const candidate = complete(
-                    SourceKey,
-                    executable,
-                    .reference,
-                    null,
-                    null,
-                    null,
-                    schedule.kind,
-                    source_configuration,
-                );
-                if (schedule_index == 0) result.reference = candidate;
-                result.frontier.insert(candidate);
-                result.generated_count += 1;
+            if (!masked_fusion_required) {
+                inline for (reference_schedules, 0..) |schedule, schedule_index| {
+                    const executable = Scheduling.Reference(capacity).plan(SemanticValidated.graph, schedule);
+                    const candidate = complete(
+                        SourceKey,
+                        executable,
+                        .reference,
+                        null,
+                        null,
+                        null,
+                        schedule.kind,
+                        source_configuration,
+                    );
+                    if (schedule_index == 0) result.reference = candidate;
+                    result.frontier.insert(candidate);
+                    result.generated_count += 1;
+                }
             }
 
             inline for (0..representations.count) |representation_index| {
                 const representation = representations.values[representation_index].?;
+                if (masked_fusion_required and !respectsMaskedFusion(SemanticValidated.graph, semantic_analysis, representation.fusion_regions)) continue;
                 const layout_graph = Analysis.LayoutAnalysis(capacity).applySelection(
                     SemanticValidated.graph,
                     representation.layout_regions,
@@ -574,7 +579,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 const schedules = Scheduling.ExecutableScheduling(capacity).enumerate(base_executable);
                 inline for (schedules) |schedule| {
                     const executable = Scheduling.ExecutableScheduling(capacity).apply(base_executable, schedule);
-                    result.frontier.insert(complete(
+                    const candidate = complete(
                         SourceKey,
                         executable,
                         .planned,
@@ -583,12 +588,56 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                         representation.remapRegime(),
                         schedule.kind,
                         source_configuration,
-                    ));
+                    );
+                    if (result.generated_count == 0) result.reference = candidate;
+                    result.frontier.insert(candidate);
                     result.generated_count += 1;
                 }
             }
 
             return result;
+        }
+
+        fn maskedWhereProducer(comptime graph: anytype, comptime analysis: SemanticFacts, comptime reduction_node_id: usize) ?usize {
+            const reduction_node = graph.nodes[reduction_node_id].?;
+            const reduction_compute = switch (reduction_node.op) {
+                .compute => |compute| compute,
+                .view => return null,
+            };
+            if (@import("../operations/reduction.zig").fromCompute(reduction_compute) == null) return null;
+            const input_id = graph.input_refs[reduction_node.input_start].?;
+            if (analysis.use_counts[input_id] != 1 or analysis.is_output[input_id]) return null;
+            const producer_id = switch (graph.tensors[input_id].?.origin) {
+                .node => |id| id,
+                else => return null,
+            };
+            const producer = graph.nodes[producer_id].?;
+            if (producer.op != .compute or producer.op.compute != .where) return null;
+            inline for (1..3) |branch| {
+                const branch_id = graph.input_refs[producer.input_start + branch].?;
+                switch (graph.tensors[branch_id].?.origin) {
+                    .literal => |literal| if (literal.bits == 0) return producer_id,
+                    else => {},
+                }
+            }
+            return null;
+        }
+
+        fn requiresMaskedFusion(comptime graph: anytype, comptime analysis: SemanticFacts) bool {
+            for (0..graph.node_ct) |node_id| {
+                if (maskedWhereProducer(graph, analysis, node_id) != null) return true;
+            }
+            return false;
+        }
+
+        fn respectsMaskedFusion(comptime graph: anytype, comptime analysis: SemanticFacts, comptime selection: Analysis.FusionSelection(capacity.max_nodes)) bool {
+            for (0..graph.node_ct) |node_id| {
+                const producer_id = maskedWhereProducer(graph, analysis, node_id) orelse continue;
+                const reduction_region = selection.node_region[node_id] orelse return false;
+                const where_region = selection.node_region[producer_id] orelse return false;
+                if (!std.meta.eql(reduction_region, where_region)) return false;
+            }
+            return true;
         }
 
         fn composeRepresentations(
@@ -1168,8 +1217,15 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                         const expression = plan.region.expressions;
                         const width = plan.traversal_plan.vector_width;
                         const accumulator_demand = plan.region.accumulators.len * (if (width > 1) @as(usize, 2) else 1);
+                        var selection_demand: usize = 0;
+                        for (plan.region.accumulators) |accumulator| {
+                            selection_demand += switch (accumulator.selection) {
+                                .none => 0,
+                                .masked => 1 + @as(usize, @intFromBool(accumulator.finalize == .mean)),
+                            };
+                        }
                         const demand = Analysis.Cost.peakLiveValues(expression) +
-                            Analysis.Cost.maxArity(expression) + @min(node.input_count, 3) + accumulator_demand;
+                            Analysis.Cost.maxArity(expression) + @min(node.input_count, 3) + accumulator_demand + selection_demand;
                         const steps = domainSteps(plan.region.domain.shape, plan.traversal_plan.vector_axis, width);
                         work += Analysis.Cost.registerPressureWork(steps, width, demand);
                     },
@@ -1298,7 +1354,13 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
 
         fn reductionWork(comptime plan: Execution.ReductionPlan) u128 {
             var operation_count = expressionWork(plan.region.expressions);
-            for (plan.region.accumulators) |_| operation_count += 1;
+            for (plan.region.accumulators) |accumulator| {
+                operation_count += 1;
+                operation_count += switch (accumulator.selection) {
+                    .none => 0,
+                    .masked => 2 + @as(u128, @intFromBool(accumulator.finalize == .mean)),
+                };
+            }
             const steps = domainSteps(
                 plan.region.domain.shape,
                 plan.traversal_plan.vector_axis,
@@ -1661,7 +1723,15 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                                     }
                                 },
                             },
-                            .reduction => |plan| units += plan.region.expressions.instructions.len + plan.region.accumulators.len,
+                            .reduction => |plan| {
+                                units += plan.region.expressions.instructions.len + plan.region.accumulators.len;
+                                for (plan.region.accumulators) |accumulator| {
+                                    units += switch (accumulator.selection) {
+                                        .none => 0,
+                                        .masked => 2,
+                                    };
+                                }
+                            },
                             .contraction => units += 1,
                         },
                     },

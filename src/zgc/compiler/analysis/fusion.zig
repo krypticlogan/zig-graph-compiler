@@ -274,8 +274,7 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                 .compute => |value| value,
                 .view => return false,
             };
-            const operation = Elementwise.fromCompute(compute) orelse return false;
-            if (!operation.isReductionCompatible()) return false;
+            if (Elementwise.fromCompute(compute) == null) return false;
 
             folded[producer_id] = true;
             for (0..producer.input_count) |input_index| {

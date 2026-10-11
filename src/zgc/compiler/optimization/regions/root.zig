@@ -26,6 +26,12 @@ pub const Reduction = struct {
         combine: Combine,
         update: Expression.ValueRef,
         finalize: Finalize,
+        selection: Selection = .none,
+    };
+
+    pub const Selection = union(enum) {
+        none,
+        masked: struct { condition: Expression.ValueRef, include_when_true: bool },
     };
 
     pub const Combine = ReductionOperation.Combine;
