@@ -2,16 +2,18 @@
 
 ZGC is an **allocation-free ahead-of-time tensor computation graph compiler** written in Zig.
 
-A graph architecture is defined at compile time,
+And, it uses Zig's `comptime` as a native compilation engine.
+
+A graph architecture is defined,
 lowered and optimized to a fixed execution graph,
 assigned an inline memory plan,
-and emitted as a specialized Zig type.
+and emitted as a specialized type all before the real program ever executes.
 
 The binary is the model.  
 Graph traversal, tensor ranks, shapes, dtypes, layouts,
 and kernel selection are compile-time-known.
 
-The project targets Zig 0.16.0.
+The project requires Zig 0.17.0.
 
 ## What's it for?
 
@@ -118,6 +120,30 @@ pub fn main() !void {
 }
 ```
 
+## Executable selection
+
+`modelWithOptions` chooses from the compiler's retained executable frontier at
+compile time. The default target is `balanced`:
+
+```zig
+const FastModel = definition.modelWithOptions(.{ .target = .fast });
+const MemoryModel = definition.modelWithOptions(.{ .target = .memory });
+const SmallModel = definition.modelWithOptions(.{ .target = .small });
+const ForcedModel = definition.modelWithOptions(.{ .frontier_index = 0 });
+```
+
+`fast` minimizes estimated runtime work, `memory` minimizes planned peak model
+buffer space, and `small` minimizes estimated generated-code units. `balanced`
+combines runtime, peak memory, and code-size ratios with a 3:1:1 weighting.
+These are compile-time estimates; `small` does not measure the linked binary.
+An explicit `frontier_index` overrides the target and fails compilation if the
+index is outside the retained frontier. Inspect
+`Model.executable_candidate_frontier` and
+`Model.selected_executable_candidate_index` to choose an index. The frontier
+retains distinct implementations for explicit selection, including some that
+lose on every current cost metric, and holds at most 16 candidates. Source
+bindings can be supplied in the same options value with `.sources = &.{...}`.
+
 ## Key capabilities
 
 - Front-facing `DefinitionBuilder` with enum-indexed sources composes graphs.
@@ -138,9 +164,12 @@ pub fn main() !void {
 - Graph-level fusion and traversal planning across compatible operations.
 - Compile-time layout and execution-plan selection.
 - Search-based compilation pipeline, and influencable concrete executables.
+- Retained executable plans that can be selected for lowering at compile-time.
 - Core-backed extensions and abstractions like `nn` and `img`.
 - Operation and generated-model benchmarks, plus standalone example packages.
 - Lean binaries and first-class inspection for any compiled tensor graph.
+- C ABI for using pre-compiled models external to Zig.
+- Reusable Python bindings that dynamically load any compatible model artifact.
 
 See [development state](docs/development-state.md) for precise limitations and
 [architecture](docs/architecture.md) for the compilation pipeline.
@@ -268,6 +297,7 @@ and recorded results.
 | `src/cli/`            | Model-specific command-line entry points                                                           |
 | `src/artifact/`       | Generated-model artifact entry points                                                              |
 | `src/extensions/`     | Optional domain abstractions exported through `zgc.ext.nn` and `zgc.ext.img`                       |
+| `bindings/`           | Reusable host-language bindings for generated model artifacts                                      |
 | `tests/`              | Compile-time graph, runtime model, validation, view, and kernel coverage                           |
 | `benchmarks/`         | Operation and generated-model benchmark harness, with recorded results                             |
 | `examples/`           | Standalone model definitions, interactive applications, inspection, and artifact analysis          |

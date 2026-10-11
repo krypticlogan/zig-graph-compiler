@@ -51,9 +51,11 @@ fn VectorizedParams(comptime Params: type) type {
     return switch (@typeInfo(Params)) {
         .array => |array| [array.len]@Vector(1, array.child),
         .@"struct" => |structure| blk: {
-            var types: [structure.fields.len]type = undefined;
-            for (structure.fields, 0..) |field, index| types[index] = @Vector(1, field.type);
-            break :blk @import("std").meta.Tuple(&types);
+            var types: [structure.field_types.len]type = undefined;
+            for (structure.field_types, 0..) |field_type, index| {
+                types[index] = @Vector(1, field_type);
+            }
+            break :blk @Tuple(&types);
         },
         else => @compileError("pointwise parameters must be an array or tuple"),
     };

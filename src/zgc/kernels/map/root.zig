@@ -44,9 +44,9 @@ fn executeProgram(
     const Output = @TypeOf(output);
     const broadcast_inputs = broadcastInputs(inputs, Output);
     var input_offsets: [inputs.len]isize = undefined;
-    inline for (std.meta.fields(@TypeOf(broadcast_inputs)), 0..) |field, index| {
+    inline for (@typeInfo(@TypeOf(broadcast_inputs)).@"struct".field_types, 0..) |Input, index| {
         const view = broadcast_inputs[index];
-        input_offsets[index] = @intCast(field.type.base_offset + view.runtime_offset);
+        input_offsets[index] = @intCast(Input.base_offset + view.runtime_offset);
     }
     executeAxes(
         program,
@@ -179,7 +179,7 @@ fn resolveVectorOffset(
 ) VectorReferenceType(program, @TypeOf(inputs), reference, vector_len) {
     return switch (reference) {
         .input => |input_index| blk: {
-            const View = std.meta.fields(@TypeOf(inputs))[input_index].type;
+            const View = @typeInfo(@TypeOf(inputs)).@"struct".field_types[input_index];
             const offset: usize = @intCast(input_offsets[input_index]);
             if (comptime View.static_strides[vector_axis] == 0) {
                 break :blk @splat(inputs[input_index].storage[offset]);
@@ -194,13 +194,13 @@ fn resolveVectorOffset(
 fn ScalarValues(comptime program: ElementwiseProgram) type {
     var types: [program.instructions.len]type = undefined;
     for (program.instructions, 0..) |instruction, index| types[index] = instruction.dtype.Scalar();
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn VectorValues(comptime program: ElementwiseProgram, comptime vector_len: usize) type {
     var types: [program.instructions.len]type = undefined;
     for (program.instructions, 0..) |instruction, index| types[index] = instruction.dtype.Vector(vector_len);
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn VectorParams(
@@ -213,7 +213,7 @@ fn VectorParams(
     for (instruction.args[0..types.len], 0..) |reference, index| {
         types[index] = VectorReferenceType(program, Inputs, reference, vector_len);
     }
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn ScalarParams(
@@ -225,7 +225,7 @@ fn ScalarParams(
     for (instruction.args[0..types.len], 0..) |reference, index| {
         types[index] = ScalarReferenceType(program, Inputs, reference);
     }
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn ScalarReferenceType(
@@ -234,7 +234,7 @@ fn ScalarReferenceType(
     comptime reference: ElementwiseProgram.ValueRef,
 ) type {
     return switch (reference) {
-        .input => |input_index| std.meta.fields(Inputs)[input_index].type.scalar_type,
+        .input => |input_index| @typeInfo(Inputs).@"struct".field_types[input_index].scalar_type,
         .instruction => |instruction_index| program.instructions[instruction_index].dtype.Scalar(),
         .accumulator => @compileError("map expressions cannot reference accumulators"),
     };
@@ -247,23 +247,24 @@ fn VectorReferenceType(
     comptime vector_len: usize,
 ) type {
     return switch (reference) {
-        .input => |input_index| std.meta.fields(Inputs)[input_index].type.dtype.Vector(vector_len),
+        .input => |input_index| @typeInfo(Inputs).@"struct".field_types[input_index].dtype.Vector(vector_len),
         .instruction => |instruction_index| program.instructions[instruction_index].dtype.Vector(vector_len),
         .accumulator => @compileError("map expressions cannot reference accumulators"),
     };
 }
 
 fn BroadcastInputs(comptime Inputs: type, comptime Output: type) type {
-    var types: [std.meta.fields(Inputs).len]type = undefined;
-    inline for (std.meta.fields(Inputs), 0..) |field, index| {
-        types[index] = @TypeOf(@as(field.type, undefined).broadcastTo(Output.rank, Output.static_shape));
+    const input_types = @typeInfo(Inputs).@"struct".field_types;
+    var types: [input_types.len]type = undefined;
+    inline for (input_types, 0..) |Input, index| {
+        types[index] = @TypeOf(@as(Input, undefined).broadcastTo(Output.rank, Output.static_shape));
     }
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn broadcastInputs(inputs: anytype, comptime Output: type) BroadcastInputs(@TypeOf(inputs), Output) {
     var result: BroadcastInputs(@TypeOf(inputs), Output) = undefined;
-    inline for (std.meta.fields(@TypeOf(inputs)), 0..) |_, index| {
+    inline for (@typeInfo(@TypeOf(inputs)).@"struct".field_types, 0..) |_, index| {
         result[index] = inputs[index].broadcastTo(Output.rank, Output.static_shape);
     }
     return result;
@@ -271,12 +272,12 @@ fn broadcastInputs(inputs: anytype, comptime Output: type) BroadcastInputs(@Type
 
 fn advanceInputOffsets(
     comptime Inputs: type,
-    offsets: *[std.meta.fields(Inputs).len]isize,
+    offsets: *[@typeInfo(Inputs).@"struct".field_types.len]isize,
     comptime axis: usize,
     amount: usize,
 ) void {
-    inline for (std.meta.fields(Inputs), 0..) |field, index| {
-        offsets[index] += field.type.static_strides[axis] * @as(isize, @intCast(amount));
+    inline for (@typeInfo(Inputs).@"struct".field_types, 0..) |Input, index| {
+        offsets[index] += Input.static_strides[axis] * @as(isize, @intCast(amount));
     }
 }
 

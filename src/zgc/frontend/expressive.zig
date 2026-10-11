@@ -11,14 +11,14 @@ value: Value,
 /// Apply a custom expression function to the current expression.
 pub fn apply(comptime self: Expr, comptime operation: anytype, comptime args: anytype) Expr {
     assertExprFn(operation);
-    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-    var argument_types: [fields.len + 1]type = undefined;
+    const field_types = @typeInfo(@TypeOf(args)).@"struct".field_types;
+    var argument_types: [field_types.len + 1]type = undefined;
     argument_types[0] = Expr;
-    inline for (fields, 1..) |field, index| argument_types[index] = field.type;
+    inline for (field_types, 1..) |field_type, index| argument_types[index] = field_type;
 
-    var call_args: std.meta.Tuple(&argument_types) = undefined;
+    var call_args: @Tuple(&argument_types) = undefined;
     call_args[0] = self;
-    inline for (0..fields.len) |index| call_args[index + 1] = args[index];
+    inline for (0..field_types.len) |index| call_args[index + 1] = args[index];
     return @call(.auto, operation, call_args);
 }
 
@@ -217,7 +217,7 @@ fn assertExprFn(comptime operation: anytype) void {
         .@"fn" => |info| info,
         else => @compileError("expression operation must be a function"),
     };
-    if (info.params.len == 0 or info.params[0].type != Expr) {
+    if (info.param_types.len == 0 or info.param_types[0] != Expr) {
         @compileError("expression operation must accept Expr as its first parameter");
     }
     if (info.return_type != Expr) {

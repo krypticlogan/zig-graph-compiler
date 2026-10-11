@@ -62,12 +62,129 @@ const BroadcastMapModel = model: {
     break :model builder.finish().model();
 };
 
+const WhereReductionSources = enum(usize) { condition, input };
+const WhereReductionKind = enum { sum, min, max, mean, conditional };
+
+fn whereReductionModel(comptime kind: WhereReductionKind, comptime frontier_index: ?usize) type {
+    var builder = zgc.DefinitionBuilder.init();
+    const sources = builder.sources(WhereReductionSources);
+    const condition = sources.input(.condition, .bool, &.{reduction_vector_length});
+    const input = sources.input(.input, .f32, &.{reduction_vector_length});
+    const selected = if (kind == .conditional)
+        builder.where(condition, input, builder.neg(input))
+    else
+        builder.where(condition, input, builder.scalar(.f32, 0));
+    const reduced = switch (kind) {
+        .sum, .conditional => builder.sum(selected, .{ .axes = &.{0} }),
+        .min => builder.min(selected, .{ .axes = &.{0} }),
+        .max => builder.max(selected, .{ .axes = &.{0} }),
+        .mean => builder.mean(selected, .{ .axes = &.{0} }),
+    };
+    builder.output(reduced);
+    return builder.finish().modelWithOptions(.{ .frontier_index = frontier_index });
+}
+
+test "where lowers into masked and conditional reductions" {
+    inline for ([_]WhereReductionKind{ .sum, .min, .max, .mean, .conditional }) |kind| {
+        const Model = whereReductionModel(kind, null);
+        var model = Model.init();
+        var condition: [reduction_vector_length]bool = @splat(false);
+        var input: [reduction_vector_length]f32 = @splat(-2);
+        condition[0] = true;
+        input[0] = 4;
+        try model.copyInput(.condition, &condition);
+        try model.copyInput(.input, &input);
+        model.run();
+        const expected: f32 = switch (kind) {
+            .sum => 4,
+            .min => 4,
+            .max => 4,
+            .mean => 4,
+            .conditional => 4 + @as(f32, @floatFromInt(reduction_vector_length - 1)) * 2,
+        };
+        try std.testing.expectEqual(expected, model.outputView(0).contiguousSlice().?[0]);
+        if (kind != .conditional) {
+            for (Model.executable_candidate_frontier.candidates[0..Model.executable_candidate_frontier.count]) |candidate| {
+                // A forced frontier choice must retain the same masked meaning.
+                try std.testing.expect(candidate.?.origin != .reference);
+            }
+        }
+    }
+}
+
+test "forced masked reduction candidates preserve the selected count" {
+    const Default = whereReductionModel(.mean, null);
+    const Forced = whereReductionModel(.mean, Default.executable_candidate_frontier.count - 1);
+    var model = Forced.init();
+    var condition: [reduction_vector_length]bool = @splat(false);
+    condition[0] = true;
+    var input: [reduction_vector_length]f32 = @splat(8);
+    input[0] = 4;
+    try model.copyInput(.condition, &condition);
+    try model.copyInput(.input, &input);
+    model.run();
+    try std.testing.expectEqual(@as(f32, 4), model.outputView(0).contiguousSlice().?[0]);
+}
+
+test "nested where and comparison predicates fold into a reduction" {
+    const Sources = enum(usize) { input, mask };
+    const Model = comptime model_type: {
+        var builder = zgc.DefinitionBuilder.init();
+        const sources = builder.sources(Sources);
+        const input = sources.input(.input, .f32, &.{reduction_vector_length});
+        const mask = sources.input(.mask, .bool, &.{reduction_vector_length});
+        const positive = builder.greaterThan(input, builder.scalar(.f32, 0));
+        const signed = builder.where(positive, input, builder.neg(input));
+        const selected = builder.where(mask, signed, builder.scalar(.f32, 2));
+        builder.output(builder.sum(selected, .{ .axes = &.{0} }));
+        break :model_type builder.finish().model();
+    };
+    try std.testing.expectEqual(@as(usize, 1), Model.executable.node_ct);
+    const plan = Model.executable.nodes[0].?.op.compute.kernel.reduction;
+    var selections: usize = 0;
+    for (plan.region.expressions.instructions) |instruction| {
+        if (instruction.operation == .select) selections += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), selections);
+
+    var model = Model.init();
+    var input: [reduction_vector_length]f32 = @splat(-3);
+    var mask: [reduction_vector_length]bool = @splat(false);
+    input[0] = 4;
+    mask[0] = true;
+    try model.copyInput(.input, &input);
+    try model.copyInput(.mask, &mask);
+    model.run();
+    try std.testing.expectEqual(@as(f32, 4 + 2 * (reduction_vector_length - 1)), model.outputView(0).contiguousSlice().?[0]);
+}
+
+test "zero true branch reverses a reduction mask and empty mean returns zero" {
+    const Model = comptime model_type: {
+        var builder = zgc.DefinitionBuilder.init();
+        const sources = builder.sources(WhereReductionSources);
+        const condition = sources.input(.condition, .bool, &.{reduction_vector_length});
+        const input = sources.input(.input, .f32, &.{reduction_vector_length});
+        builder.output(builder.mean(builder.where(condition, builder.scalar(.f32, 0), input), .{ .axes = &.{0} }));
+        break :model_type builder.finish().model();
+    };
+
+    var model = Model.init();
+    var condition_storage: [reduction_vector_length]bool = @splat(true);
+    const input_storage: [reduction_vector_length]f32 = @splat(3);
+    try model.copyInput(.condition, &condition_storage);
+    try model.copyInput(.input, &input_storage);
+    model.run();
+    try std.testing.expectEqual(@as(f32, 0), model.outputView(0).contiguousSlice().?[0]);
+
+    condition_storage[reduction_vector_length - 1] = false;
+    try model.copyInput(.condition, &condition_storage);
+    model.run();
+    try std.testing.expectEqual(@as(f32, 3), model.outputView(0).contiguousSlice().?[0]);
+}
+
 test "elementwise producer folds into its reduction" {
     const Model = ProducerReductionModel;
 
-    try std.testing.expectEqual(@as(usize, 2), Model.fusion_candidate_count);
-    try std.testing.expectEqual(@as(usize, 2), Model.representation_candidate_count);
-    try std.testing.expectEqual(@as(usize, 9), Model.executable_candidate_count);
     try std.testing.expectEqual(.discovered, Model.selected_executable_candidate.fusion_regime.?);
     try std.testing.expectEqual(@as(usize, 2), Model.semantic_graph.node_ct);
     try std.testing.expectEqual(@as(usize, 1), Model.executable.node_ct);

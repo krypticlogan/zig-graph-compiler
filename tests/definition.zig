@@ -51,8 +51,11 @@ test "definition counting and lowering preserve exact graph contracts" {
     const vector_width = std.simd.suggestVectorLength(f32) orelse 1;
     switch (graph.nodes[0].?.op.compute) {
         .kernel => |kernel| {
-            try std.testing.expect(vector_width <= 4);
-            try std.testing.expectEqualStrings("contracted_axis", @tagName(kernel.contraction.strategy));
+            if (vector_width <= 4) {
+                try std.testing.expectEqualStrings("contracted_axis", @tagName(kernel.contraction.strategy));
+            } else {
+                try std.testing.expectEqualStrings("scalar", @tagName(kernel.contraction.strategy));
+            }
         },
         .direct => |semantic| {
             try std.testing.expect(vector_width > 4);
@@ -163,7 +166,7 @@ test "scalar and full definitions retain immutable literal geometry" {
     };
 
     try std.testing.expectEqualSlices(usize, &.{}, definition.tensors[0].value.shape.slice());
-    try std.testing.expectEqual(@as(usize, 0), @typeInfo(@TypeOf(definition).Source).@"enum".fields.len);
+    try std.testing.expectEqual(@as(usize, 0), @typeInfo(@TypeOf(definition).Source).@"enum".field_names.len);
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, definition.tensors[2].value.shape.slice());
     switch (definition.tensors[0].origin) {
         .literal => |value| try std.testing.expectEqual(@as(f32, 2.5), value.get(.f32)),

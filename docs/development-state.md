@@ -2,7 +2,7 @@
 
 ZGC is functional but pre-release. The compile-time definition-to-model path,
 runtime execution, tests, examples, and operation benchmark suite are working
-on Zig 0.16.0. The API should still be expected to change.
+on Zig 0.17.0. The API should still be expected to change.
 
 ## Implementation roadmap
 

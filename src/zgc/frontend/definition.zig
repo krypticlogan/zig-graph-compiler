@@ -6,7 +6,7 @@ const Op = op_module.Op;
 const SourceStorage = @import("../storage/source.zig");
 const Tensor = @import("../core/tensor.zig");
 const Expr = @import("expressive.zig");
-const EmptySourceKey = enum(usize) {};
+const EmptySourceKey = enum(noreturn) {};
 pub const SerializedSourceKey = enum(usize) { _ };
 
 /// Axes omitted with `null` reduce the entire tensor. Reduced dimensions are
@@ -120,6 +120,12 @@ pub fn Definition(
             /// Storage policy applied to the selected source.
             binding: SourceStorage.Binding,
         };
+        pub const ModelOptions = struct {
+            sources: []const SourceOverride = &.{},
+            target: @import("../compiler/search.zig").OptimizationTarget = .balanced,
+            /// An index in the retained executable frontier overrides target.
+            frontier_index: ?usize = null,
+        };
 
         nodes: [node_count]Node,
         tensors: [tensor_count]TensorRecord,
@@ -134,16 +140,21 @@ pub fn Definition(
         /// Run capacity counting, graph lowering, memory planning, and model
         /// generation for this completed definition.
         pub fn model(comptime definition: Self) type {
+            return definition.modelWithOptions(.{});
+        }
+
+        pub fn modelWith(comptime definition: Self, comptime sources: []const SourceOverride) type {
+            return definition.modelWithOptions(.{ .sources = sources });
+        }
+
+        /// Compile with source overrides and executable selection preferences.
+        pub fn modelWithOptions(comptime definition: Self, comptime options: ModelOptions) type {
             return @import("../compiler/root.zig").model(
                 Self,
                 definition,
-                @as([]const SourceOverride, &.{}),
+                options.sources,
+                .{ .target = options.target, .frontier_index = options.frontier_index },
             );
-        }
-
-        /// Compile this definition with typed source-storage overrides.
-        pub fn modelWith(comptime definition: Self, comptime sources: []const SourceOverride) type {
-            return @import("../compiler/root.zig").model(Self, definition, sources);
         }
     };
 }
@@ -184,9 +195,9 @@ pub const DefinitionBuilder = struct {
             }
         } else {
             self.source_key_type = &[_]type{SourceKey};
-            const fields = @typeInfo(SourceKey).@"enum".fields;
+            const info = @typeInfo(SourceKey).@"enum";
             var names: [sourceNameCapacity(SourceKey)][:0]const u8 = @splat("");
-            for (fields) |field| names[@intCast(field.value)] = field.name;
+            for (info.field_values, info.field_names) |value, name| names[@intCast(value)] = name;
             self.source_names = &names;
         }
         return .{ .builder = self };
@@ -761,7 +772,7 @@ pub fn Sources(comptime SourceKey: type) type {
             comptime dtype: Dtype,
             comptime shape: []const usize,
         ) Value {
-            return self.builder.addSource(@intCast(@intFromEnum(key)), .input, dtype, shape);
+            return self.builder.addSource(@intCast(@backingInt(key)), .input, dtype, shape);
         }
 
         pub fn parameter(
@@ -770,7 +781,7 @@ pub fn Sources(comptime SourceKey: type) type {
             comptime dtype: Dtype,
             comptime shape: []const usize,
         ) Value {
-            return self.builder.addSource(@intCast(@intFromEnum(key)), .parameter, dtype, shape);
+            return self.builder.addSource(@intCast(@backingInt(key)), .parameter, dtype, shape);
         }
 
         pub fn constant(
@@ -779,7 +790,7 @@ pub fn Sources(comptime SourceKey: type) type {
             comptime dtype: Dtype,
             comptime shape: []const usize,
         ) Value {
-            return self.builder.addSource(@intCast(@intFromEnum(key)), .constant, dtype, shape);
+            return self.builder.addSource(@intCast(@backingInt(key)), .constant, dtype, shape);
         }
     };
 }
@@ -839,15 +850,15 @@ fn normalizeInsertionAxis(comptime rank: usize, comptime requested_axis: i8) usi
 fn validateSourceKey(comptime Enum: type) void {
     const info = @typeInfo(Enum);
     if (info != .@"enum") @compileError("DefinitionBuilder source keys must be an enum type");
-    for (info.@"enum".fields) |field| {
-        if (field.value < 0) @compileError("source enum values must be non-negative");
+    for (info.@"enum".field_values) |value| {
+        if (value < 0) @compileError("source enum values must be non-negative");
     }
 }
 
 fn sourceNameCapacity(comptime Enum: type) usize {
     var capacity: usize = 0;
-    for (@typeInfo(Enum).@"enum".fields) |field| {
-        capacity = @max(capacity, @as(usize, @intCast(field.value)) + 1);
+    for (@typeInfo(Enum).@"enum".field_values) |value| {
+        capacity = @max(capacity, @as(usize, @intCast(value)) + 1);
     }
     return capacity;
 }
@@ -857,17 +868,17 @@ fn validateSources(
     comptime SourceKey: type,
     comptime source_names: []const [:0]const u8,
 ) void {
-    const fields = @typeInfo(SourceKey).@"enum".fields;
+    const info = @typeInfo(SourceKey).@"enum";
     for (tensors) |tensor| switch (tensor.origin) {
         .source => |source_index| {
             var found = false;
-            for (fields) |field| {
-                if (field.value == source_index) {
+            for (info.field_values) |value| {
+                if (value == source_index) {
                     found = true;
                     break;
                 }
             }
-            if (!found and @typeInfo(SourceKey).@"enum".is_exhaustive) {
+            if (!found and info.mode == .exhaustive) {
                 @compileError("definition contains a source outside its SourceKey enum");
             }
             if (source_index >= source_names.len) {

@@ -155,7 +155,7 @@ const definition = blk: {
 
 const FluidStep = blk: {
     @setEvalBranchQuota(2_000_000);
-    break :blk definition.model();
+    break :blk @import("benchmark_selection").model(definition, &.{});
 };
 
 fn directLbmStep(

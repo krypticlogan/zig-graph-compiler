@@ -19,7 +19,7 @@ const definition = blk: {
     break :blk builder.finish();
 };
 
-const Model = definition.modelWith(&.{
+const Model = @import("benchmark_selection").model(definition, &.{
     .{ .source = .lhs, .binding = zgc.memory.Source.bound },
     .{ .source = .rhs, .binding = zgc.memory.Source.bound },
     .{ .source = .bias, .binding = zgc.memory.Source.bound },

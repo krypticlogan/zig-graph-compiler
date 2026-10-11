@@ -158,9 +158,9 @@ fn canVectorizeExpressionSegment(
     }
 
     const shape = segment.expression_shape[0..segment.expression_rank].*;
-    inline for (std.meta.fields(Inputs), 0..) |field, input_index| {
+    inline for (@typeInfo(Inputs).@"struct".field_types, 0..) |Input, input_index| {
         if (!programUsesInput(program, input_index)) continue;
-        const View = @TypeOf(@as(field.type, undefined).broadcastTo(segment.expression_rank, shape));
+        const View = @TypeOf(@as(Input, undefined).broadcastTo(segment.expression_rank, shape));
         const stride = View.static_strides[expression_axis];
         if (stride != 0 and stride != 1) return false;
     }

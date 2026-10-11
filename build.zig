@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const cli_options = b.addOptions();
-    cli_options.addOption([]const u8, "source_root", b.pathFromRoot("."));
+    cli_options.addOption([]const u8, "source_root", b.root.joinString(b.allocator, ".") catch @panic("OOM"));
     const cli = b.addExecutable(.{
         .name = "zgc",
         .root_module = b.createModule(.{
@@ -112,6 +112,10 @@ pub fn build(b: *std.Build) void {
     const benchmark_warmup = b.option(usize, "warmup_iterations", "Untimed warmup invocations (0 warms for warmup_ms)") orelse 0;
     const benchmark_sample_ms = b.option(usize, "sample_ms", "Minimum duration of each automatically calibrated timed sample") orelse 250;
     const benchmark_warmup_ms = b.option(usize, "warmup_ms", "Duration of the automatic untimed warmup") orelse 2_000;
+    const benchmark_target = b.option([]const u8, "optimization_target", "Executable selection: balanced, memory, fast, or small") orelse "balanced";
+    const benchmark_frontier_index = b.option(usize, "frontier_index", "Force this zero-based retained executable index") orelse std.math.maxInt(usize);
+    const benchmark_show_frontier = b.option(bool, "show_frontier", "Print costs for every retained executable") orelse false;
+    const benchmark_results_file = b.option([]const u8, "results_file", "Append benchmark records to a JSON index file") orelse "";
 
     const benchmark_options = b.addOptions();
     benchmark_options.addOption(usize, "iterations", benchmark_iterations);
@@ -119,6 +123,20 @@ pub fn build(b: *std.Build) void {
     benchmark_options.addOption(usize, "warmup_iterations", benchmark_warmup);
     benchmark_options.addOption(usize, "sample_ms", benchmark_sample_ms);
     benchmark_options.addOption(usize, "warmup_ms", benchmark_warmup_ms);
+    benchmark_options.addOption([]const u8, "optimization_target", benchmark_target);
+    benchmark_options.addOption(usize, "frontier_index", benchmark_frontier_index);
+    benchmark_options.addOption(bool, "show_frontier", benchmark_show_frontier);
+    benchmark_options.addOption([]const u8, "results_file", benchmark_results_file);
+    const benchmark_options_module = benchmark_options.createModule();
+    const benchmark_selection = b.createModule(.{
+        .root_source_file = b.path("benchmarks/selection.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "build_options", .module = benchmark_options_module },
+        },
+    });
 
     const benchmark_source = if (std.mem.eql(u8, benchmark_name, "contraction"))
         "benchmarks/workloads/contraction.zig"
@@ -138,7 +156,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path(benchmark_source),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
+        .imports = &.{
+            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "benchmark_selection", .module = benchmark_selection },
+        },
     });
 
     const benchmark_exe = b.addExecutable(.{
@@ -149,7 +170,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zgc", .module = zgc_mod },
-                .{ .name = "build_options", .module = benchmark_options.createModule() },
+                .{ .name = "build_options", .module = benchmark_options_module },
                 .{ .name = "benchmark_case", .module = benchmark_case },
             },
         }),

@@ -12,7 +12,7 @@ pub const BasicModel = model: {
     break :model builder.finish().model();
 };
 
-const FullSources = enum(usize) {};
+const FullSources = enum(noreturn) {};
 const FullDefinition = zgc.DefinitionBuilder;
 pub const FullModel = model: {
     var builder = FullDefinition.init();
@@ -41,7 +41,7 @@ pub const BoundInputModel = parameter_definition.modelWith(&.{
 pub const MatmulSources = enum(usize) { input, weights };
 pub const matmul_batch = std.simd.suggestVectorLength(f32) orelse 4;
 const MatmulDefinition = zgc.DefinitionBuilder;
-const matmul_definition = definition: {
+pub const matmul_definition = definition: {
     var builder = MatmulDefinition.init();
     const builder_sources = builder.sources(MatmulSources);
     const input = builder_sources.input(.input, .f32, &.{ matmul_batch, 3 });

@@ -79,6 +79,7 @@ pub fn Model(
     comptime SemanticValidated: type,
     comptime semantic_analysis: anytype,
     comptime executable_search: anytype,
+    comptime selection: @import("../compiler/search.zig").SelectionOptions,
     comptime Validated: type,
     comptime lifetimes: anytype,
     comptime SourcePlan: type,
@@ -91,6 +92,7 @@ pub fn Model(
         pub const SourceKeyType = SourceKey;
         pub const SourceError = error{SourceSizeMismatch};
         pub const executable = graph;
+        pub const structural_fingerprint = @import("../compiler/analysis/fingerprint.zig").executable(graph);
         pub const memory_plan = plan;
         pub const internal_capacity = capacities;
         pub const raw_graph = raw;
@@ -105,7 +107,11 @@ pub fn Model(
         pub const fusion_candidate_count = executable_search.fusion_candidate_count;
         pub const layout_candidate_count = executable_search.layout_candidate_count;
         pub const remap_candidate_count = executable_search.remap_candidate_count;
-        pub const selected_executable_candidate = executable_search.selected();
+        pub const contraction_candidate_count = executable_search.contraction_candidate_count;
+        pub const generated_contraction_strategies = executable_search.generated_contraction_strategies;
+        pub const selection_options = selection;
+        pub const selected_executable_candidate_index = executable_search.selectedIndex(selection);
+        pub const selected_executable_candidate = executable_search.selected(selection);
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;
         pub const source_names = source_name_table;
@@ -219,7 +225,7 @@ pub fn Model(
                     const tensor_id = graph.input_refs[node.input_start + input_index].?;
                     input_types[input_index] = Validated.ConstView(tensor_id);
                 }
-                break :blk std.meta.Tuple(&input_types);
+                break :blk @Tuple(&input_types);
             };
 
             var inputs: InputViews = undefined;
@@ -234,7 +240,7 @@ pub fn Model(
                     const tensor_id = graph.output_refs[node.output_start + output_index].?;
                     output_types[output_index] = Validated.View(tensor_id);
                 }
-                break :blk std.meta.Tuple(&output_types);
+                break :blk @Tuple(&output_types);
             };
             var outputs: OutputViews = undefined;
             inline for (0..node.output_count) |output_index| {
@@ -319,7 +325,7 @@ pub fn Model(
         }
 
         fn sourceIndex(comptime source_key: SourceKey) usize {
-            const source_id: usize = @intCast(@intFromEnum(source_key));
+            const source_id: usize = @intCast(@backingInt(source_key));
             if (source_id >= graph.sources.len or graph.sources[source_id] == null) {
                 @compileError("the graph does not contain the provided source key");
             }

@@ -141,6 +141,7 @@ pub fn finish(
         .identity => narrowScalar(dtype, accumulator),
         .mean => blk: {
             if (comptime dtype.kind() != .float) @compileError("mean requires a floating-point dtype");
+            if (reduction_count == 0) break :blk 0;
             const divisor: AccumulatorScalar(dtype) = @floatFromInt(reduction_count);
             break :blk narrowScalar(dtype, accumulator / divisor);
         },
