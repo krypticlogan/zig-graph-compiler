@@ -19,14 +19,14 @@ const definition = blk: {
     break :blk builder.finish();
 };
 
-const Model = @import("benchmark_selection").model(definition, &.{.{
+const Executable = @import("benchmark_selection").executable(definition, &.{.{
     .source = .input,
     .binding = zgc.memory.Source.bound,
 }});
 
 pub const ZgcBenchmark = struct {
     const Self = @This();
-    pub const CompiledModel = Model;
+    pub const CompiledExecutable = Executable;
 
     pub const name = "graph/reduction/sum-mean-min-max/256x256/axis1";
     pub const default_iterations = 1_000;
@@ -35,12 +35,12 @@ pub const ZgcBenchmark = struct {
     pub const work_unit = "elements";
     pub const bytes_per_invocation: f64 = @sizeOf(f32) * (element_count + 4 * rows);
 
-    model: Model,
+    runtime: Executable.Runtime,
     input: [element_count]f32,
 
     pub fn init() Self {
-        var result: Self = .{ .model = Model.init(), .input = undefined };
-        const layout = Model.sourceLayout(.input);
+        var result: Self = .{ .runtime = Executable.Runtime.init(), .input = undefined };
+        const layout = Executable.Runtime.sourceLayout(.input);
         for (0..rows) |row| {
             for (0..columns) |column| {
                 const offset: usize = @intCast(row * @as(usize, @intCast(layout.strides[0])) +
@@ -52,11 +52,11 @@ pub const ZgcBenchmark = struct {
     }
 
     pub fn prepare(self: *Self) !void {
-        try self.model.bindInput(.input, &self.input);
+        try self.runtime.bindInput(.input, &self.input);
     }
 
     pub fn validate(self: *Self) !void {
-        self.model.run();
+        self.runtime.run();
         var expected_sum: f32 = 0;
         var expected_min = std.math.inf(f32);
         var expected_max = -std.math.inf(f32);
@@ -66,16 +66,16 @@ pub const ZgcBenchmark = struct {
             expected_min = @min(expected_min, item);
             expected_max = @max(expected_max, item);
         }
-        if (!std.math.approxEqAbs(f32, expected_sum, self.model.outputView(0).get(.{0}), 1e-4) or
-            !std.math.approxEqAbs(f32, expected_sum / @as(f32, @floatFromInt(columns)), self.model.outputView(1).get(.{0}), 1e-5) or
-            self.model.outputView(2).get(.{0}) != expected_min or
-            self.model.outputView(3).get(.{0}) != expected_max) return error.IncorrectResult;
+        if (!std.math.approxEqAbs(f32, expected_sum, self.runtime.outputView(0).get(.{0}), 1e-4) or
+            !std.math.approxEqAbs(f32, expected_sum / @as(f32, @floatFromInt(columns)), self.runtime.outputView(1).get(.{0}), 1e-5) or
+            self.runtime.outputView(2).get(.{0}) != expected_min or
+            self.runtime.outputView(3).get(.{0}) != expected_max) return error.IncorrectResult;
     }
 
     pub fn run(self: *Self, iterations: usize) void {
         for (0..iterations) |_| {
-            self.model.run();
-            inline for (0..4) |output| std.mem.doNotOptimizeAway(self.model.outputView(output).storage);
+            self.runtime.run();
+            inline for (0..4) |output| std.mem.doNotOptimizeAway(self.runtime.outputView(output).storage);
         }
     }
 };

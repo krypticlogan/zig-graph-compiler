@@ -291,7 +291,7 @@ pub fn ConstView(comptime T: type, comptime tensor_rank: usize) type {
     };
 }
 
-/// Mutable view whose tensor geometry is part of its type. Compiled models use
+/// Mutable view whose tensor geometry is part of its type. Executables use
 /// this form so shape, strides, base offset, element count, and layout
 /// properties are available to kernels at compile time.
 pub fn StaticView(

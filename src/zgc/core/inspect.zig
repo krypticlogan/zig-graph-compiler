@@ -14,41 +14,41 @@ pub const Sections = struct {
     memory_plan: bool = true,
 };
 
-/// Render the compile-time structure and storage plan of a generated model.
-pub fn writeModel(
-    comptime Model: type,
+/// Render the compile-time structure and storage plan of an executable.
+pub fn writeExecutable(
+    comptime Executable: type,
     writer: *Writer,
     sections: Sections,
 ) Writer.Error!void {
     if (sections.capacity) {
         try writer.writeAll("== Capacity ==\n");
-        try writeCapacity(writer, Model.internal_capacity);
+        try writeCapacity(writer, Executable.internal_capacity);
     }
     if (sections.raw_graph) {
         if (sections.capacity) try writer.writeByte('\n');
         try writer.writeAll("== Raw graph ==\n");
-        try writeGraph(writer, Model.raw_graph);
+        try writeGraph(writer, Executable.raw_graph);
     }
     if (sections.semantic_graph) {
         if (sections.capacity or sections.raw_graph) try writer.writeByte('\n');
         try writer.writeAll("== Optimized semantic graph ==\n");
-        try writeGraph(writer, Model.semantic_graph);
+        try writeGraph(writer, Executable.semantic_graph);
     }
     if (sections.executable) {
         if (sections.capacity or sections.raw_graph or sections.semantic_graph) try writer.writeByte('\n');
         try writer.writeAll("== Executable ==\n");
-        try writeExecutable(writer, Model.executable);
+        try writeProgram(writer, Executable.program);
     }
     if (sections.structure) {
         if (sections.capacity or sections.raw_graph or sections.semantic_graph or sections.executable) try writer.writeByte('\n');
-        try writeExecutableStructure(writer, Model.executable);
+        try writeExecutableStructure(writer, Executable.program);
     }
     if (sections.memory_plan) {
         if (sections.capacity or sections.raw_graph or sections.semantic_graph or sections.executable or sections.structure) {
             try writer.writeByte('\n');
         }
         try writer.writeAll("== Memory plan ==\n");
-        try writeMemoryPlan(Model, writer);
+        try writeMemoryPlan(Executable, writer);
     }
 }
 
@@ -70,7 +70,7 @@ pub fn writeGraph(writer: *Writer, comptime graph: anytype) Writer.Error!void {
     return writeRepresentation(writer, graph, "Graph");
 }
 
-pub fn writeExecutable(writer: *Writer, comptime executable: anytype) Writer.Error!void {
+pub fn writeProgram(writer: *Writer, comptime executable: anytype) Writer.Error!void {
     return writeRepresentation(writer, executable, "Executable");
 }
 
@@ -151,10 +151,10 @@ pub fn writeExecutableStructure(writer: *Writer, comptime graph: anytype) Writer
     }
 }
 
-pub fn writeMemoryPlan(comptime Model: type, writer: *Writer) Writer.Error!void {
-    const graph = Model.executable;
-    const plan = Model.memory_plan;
-    const SourcePlan = Model.source_plan;
+pub fn writeMemoryPlan(comptime Executable: type, writer: *Writer) Writer.Error!void {
+    const graph = Executable.program;
+    const plan = Executable.memory_plan;
+    const SourcePlan = Executable.source_plan;
 
     try writer.print(
         "MemoryPlan(bytes={d}, alignment={d}, tensors={d})\n",
@@ -191,17 +191,17 @@ pub fn writeMemoryPlan(comptime Model: type, writer: *Writer) Writer.Error!void 
     }
 }
 
-/// Render the mutable inline storage of a particular model instance.
-pub fn writeModelMemory(model: anytype, writer: *Writer, byte_limit: usize) Writer.Error!void {
-    const Model = @TypeOf(model.*);
-    const plan = Model.memory_plan;
+/// Render the mutable inline storage of a particular executable instance.
+pub fn writeRuntimeMemory(runtime: anytype, writer: *Writer, byte_limit: usize) Writer.Error!void {
+    const Runtime = @TypeOf(runtime.*);
+    const plan = Runtime.memory_plan;
     const displayed_bytes = @min(byte_limit, plan.byte_count);
     try writer.print(
-        "ModelMemory(bytes={d}, alignment={d}, showing={d})\n",
+        "RuntimeMemory(bytes={d}, alignment={d}, showing={d})\n",
         .{ plan.byte_count, plan.alignment, displayed_bytes },
     );
 
-    for (model.memory[0..displayed_bytes], 0..) |byte, offset| {
+    for (runtime.memory[0..displayed_bytes], 0..) |byte, offset| {
         if (offset % 16 == 0) try writer.print("  {x:0>6}: ", .{offset});
         try writer.print("{x:0>2} ", .{byte});
         if (offset % 16 == 15 or offset + 1 == displayed_bytes) {
@@ -214,78 +214,78 @@ pub fn writeModelMemory(model: anytype, writer: *Writer, byte_limit: usize) Writ
     }
 }
 
-/// Parse and render one static model-inspection command. Returns false after
+/// Parse and render one static executable-inspection command. Returns false after
 /// writing usage information for an invalid command.
 pub fn runModuleCli(
-    comptime ModelModule: type,
+    comptime ExecutableModule: type,
     args: []const []const u8,
     writer: *Writer,
 ) Writer.Error!bool {
-    const model_count = comptime inspectableModelCount(ModelModule);
+    const executable_count = comptime inspectableExecutableCount(ExecutableModule);
     var command_args = args;
-    var requested_model: ?[]const u8 = null;
+    var requested_executable: ?[]const u8 = null;
 
-    if (args.len > 0 and std.mem.eql(u8, args[0], "--model")) {
+    if (args.len > 0 and std.mem.eql(u8, args[0], "--executable")) {
         if (args.len < 2) {
-            try writer.writeAll("--model requires an exported model declaration\n\n");
-            try writeModuleCliUsage(ModelModule, writer);
+            try writer.writeAll("--executable requires an exported executable declaration\n\n");
+            try writeModuleCliUsage(ExecutableModule, writer);
             return false;
         }
-        requested_model = args[1];
+        requested_executable = args[1];
         command_args = args[2..];
     }
 
-    if (requested_model) |name| {
-        inline for (@typeInfo(ModelModule).@"struct".decl_names) |declaration_name| {
-            const Candidate = @field(ModelModule, declaration_name);
-            if (comptime isInspectableModel(Candidate)) {
+    if (requested_executable) |name| {
+        inline for (@typeInfo(ExecutableModule).@"struct".decl_names) |declaration_name| {
+            const Candidate = @field(ExecutableModule, declaration_name);
+            if (comptime isInspectableExecutable(Candidate)) {
                 if (std.mem.eql(u8, name, declaration_name)) {
                     return runCli(Candidate, command_args, writer);
                 }
             }
         }
 
-        try writer.print("unknown model declaration: {s}\n\n", .{name});
-        try writeModuleCliUsage(ModelModule, writer);
+        try writer.print("unknown executable declaration: {s}\n\n", .{name});
+        try writeModuleCliUsage(ExecutableModule, writer);
         return false;
     }
 
-    if (model_count == 1) {
-        inline for (@typeInfo(ModelModule).@"struct".decl_names) |declaration_name| {
-            const Candidate = @field(ModelModule, declaration_name);
-            if (comptime isInspectableModel(Candidate)) {
+    if (executable_count == 1) {
+        inline for (@typeInfo(ExecutableModule).@"struct".decl_names) |declaration_name| {
+            const Candidate = @field(ExecutableModule, declaration_name);
+            if (comptime isInspectableExecutable(Candidate)) {
                 return runCli(Candidate, command_args, writer);
             }
         }
     }
 
-    if (model_count == 0) {
-        try writer.writeAll("the imported model module exports no inspectable models\n");
+    if (executable_count == 0) {
+        try writer.writeAll("the imported executable module exports no inspectable executables\n");
         return false;
     }
 
-    try writer.writeAll("the imported module exports multiple models; select one with --model\n\n");
-    try writeModuleCliUsage(ModelModule, writer);
+    try writer.writeAll("the imported module exports multiple executables; select one with --executable\n\n");
+    try writeModuleCliUsage(ExecutableModule, writer);
     return false;
 }
 
-/// Parse and render one static model-inspection command. Returns false after
+/// Parse and render one static executable-inspection command. Returns false after
 /// writing usage information for an invalid command.
 pub fn runCli(
-    comptime Model: type,
+    comptime Executable: type,
     args: []const []const u8,
     writer: *Writer,
 ) Writer.Error!bool {
     if (args.len == 0 or std.mem.eql(u8, args[0], "all")) {
         if (args.len > 1) return invalidCommand(writer, args[1]);
-        try writeModel(Model, writer, .{});
+        try writeExecutable(Executable, writer, .{});
         return true;
     }
     if (args.len > 1) return invalidCommand(writer, args[1]);
 
     const command = args[0];
     if (std.mem.eql(u8, command, "summary")) {
-        try writeModel(Model, writer, .{
+        try writeExecutable(Executable, writer, .{
             .executable = false,
             .raw_graph = false,
             .semantic_graph = false,
@@ -293,7 +293,7 @@ pub fn runCli(
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "executable")) {
-        try writeModel(Model, writer, .{
+        try writeExecutable(Executable, writer, .{
             .capacity = false,
             .raw_graph = false,
             .semantic_graph = false,
@@ -301,7 +301,7 @@ pub fn runCli(
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "raw-graph")) {
-        try writeModel(Model, writer, .{
+        try writeExecutable(Executable, writer, .{
             .capacity = false,
             .semantic_graph = false,
             .executable = false,
@@ -309,7 +309,7 @@ pub fn runCli(
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "semantic-graph")) {
-        try writeModel(Model, writer, .{
+        try writeExecutable(Executable, writer, .{
             .capacity = false,
             .raw_graph = false,
             .executable = false,
@@ -317,13 +317,13 @@ pub fn runCli(
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "representations")) {
-        try writeModel(Model, writer, .{
+        try writeExecutable(Executable, writer, .{
             .capacity = false,
             .structure = false,
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "tree")) {
-        try writeModel(Model, writer, .{
+        try writeExecutable(Executable, writer, .{
             .capacity = false,
             .raw_graph = false,
             .semantic_graph = false,
@@ -331,7 +331,7 @@ pub fn runCli(
             .memory_plan = false,
         });
     } else if (std.mem.eql(u8, command, "memory-plan")) {
-        try writeModel(Model, writer, .{
+        try writeExecutable(Executable, writer, .{
             .capacity = false,
             .raw_graph = false,
             .semantic_graph = false,
@@ -348,7 +348,7 @@ pub fn runCli(
 
 pub fn writeCliUsage(writer: *Writer) Writer.Error!void {
     try writer.writeAll(
-        \\usage: zgc-inspect [--model <declaration>] [all|summary|raw-graph|semantic-graph|executable|representations|tree|memory-plan|help]
+        \\usage: zgc-inspect [--executable <declaration>] [all|summary|raw-graph|semantic-graph|executable|representations|tree|memory-plan|help]
         \\
         \\  all          capacity, graph, executable, tree, and memory plan (default)
         \\  summary      exact graph capacity
@@ -363,31 +363,31 @@ pub fn writeCliUsage(writer: *Writer) Writer.Error!void {
     );
 }
 
-pub fn writeModuleCliUsage(comptime ModelModule: type, writer: *Writer) Writer.Error!void {
+pub fn writeModuleCliUsage(comptime ExecutableModule: type, writer: *Writer) Writer.Error!void {
     try writeCliUsage(writer);
-    try writer.writeAll("\ninspectable model declarations:\n");
-    inline for (@typeInfo(ModelModule).@"struct".decl_names) |declaration_name| {
-        const Candidate = @field(ModelModule, declaration_name);
-        if (comptime isInspectableModel(Candidate)) {
+    try writer.writeAll("\ninspectable executable declarations:\n");
+    inline for (@typeInfo(ExecutableModule).@"struct".decl_names) |declaration_name| {
+        const Candidate = @field(ExecutableModule, declaration_name);
+        if (comptime isInspectableExecutable(Candidate)) {
             try writer.print("  {s}\n", .{declaration_name});
         }
     }
 }
 
-fn inspectableModelCount(comptime ModelModule: type) usize {
+fn inspectableExecutableCount(comptime ExecutableModule: type) usize {
     var count: usize = 0;
-    const info = @typeInfo(ModelModule).@"struct";
+    const info = @typeInfo(ExecutableModule).@"struct";
     for (info.decl_names) |declaration| {
-        if (isInspectableModel(@field(ModelModule, declaration))) count += 1;
+        if (isInspectableExecutable(@field(ExecutableModule, declaration))) count += 1;
     }
     return count;
 }
 
-fn isInspectableModel(comptime Candidate: anytype) bool {
+fn isInspectableExecutable(comptime Candidate: anytype) bool {
     if (@TypeOf(Candidate) != type) return false;
     return @hasDecl(Candidate, "internal_capacity") and
         @hasDecl(Candidate, "raw_graph") and
-        @hasDecl(Candidate, "executable") and
+        @hasDecl(Candidate, "program") and
         @hasDecl(Candidate, "memory_plan") and
         @hasDecl(Candidate, "source_plan");
 }

@@ -1,6 +1,8 @@
 //! Public ZGC API.
 pub const frontend = struct {
-    pub const modelFromZgir = @import("zgc/frontend/instantiation.zig").modelFromZgir;
+    pub const executableFromZgir = @import("zgc/frontend/instantiation.zig").executableFromZgir;
+    pub const executableFromZgirWithOptions = @import("zgc/frontend/instantiation.zig").executableFromZgirWithOptions;
+    pub const ZgirExecutableOptions = @import("zgc/frontend/instantiation.zig").ZgirExecutableOptions;
     pub const DefinitionBuilder = @import("zgc/frontend/definition.zig").DefinitionBuilder;
     pub const Expr = @import("zgc/frontend/expressive.zig");
     pub const Value = @import("zgc/frontend/definition.zig").Value;
@@ -28,7 +30,7 @@ pub const compiler = struct {
 pub const core = struct {
     pub const GraphCapacity = @import("zgc/core/graph.zig").Capacity;
     pub const Tensor = @import("zgc/core/tensor.zig");
-    pub const Model = @import("zgc/core/model.zig").Model;
+    pub const Executable = @import("zgc/core/executable.zig").Executable;
 };
 
 pub const memory = struct {
@@ -41,7 +43,7 @@ pub const memory = struct {
 pub const Op = @import("zgc/operations/semantic.zig").Op;
 
 pub const execution = struct {
-    pub const Executable = @import("zgc/execution/program.zig").Executable;
+    pub const Program = @import("zgc/execution/program.zig").Program;
     pub const ExecutableCompute = @import("zgc/execution/execution.zig").ExecutableCompute;
     pub const KernelPlan = @import("zgc/execution/execution.zig").KernelPlan;
 };

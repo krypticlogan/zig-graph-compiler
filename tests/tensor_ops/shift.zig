@@ -20,11 +20,11 @@ const boundary_model = model: {
             .{ .offsets = &.{-1}, .boundary = .{ .redirect = 0 } },
         },
     }));
-    break :model b.finish().model();
+    break :model b.finish().executable();
 };
 
 test "shift maps positive and negative offsets across every boundary mode" {
-    var model = boundary_model.init();
+    var model = boundary_model.Runtime.init();
     try model.copyInput(.input, &.{ 1, 2, 3, 4, 5, 6 });
     try model.copyInput(.fill, &.{-9});
     model.run();
@@ -61,7 +61,7 @@ const loop_model = model: {
             .{ .offsets = &.{ -1, 1 }, .boundary = .{ .redirect = 6 } },
         },
     }));
-    break :model b.finish().model();
+    break :model b.finish().executable();
 };
 
 test "slice loop fuses a vectorized producer and redirects boundary channels" {
@@ -84,7 +84,7 @@ test "slice loop fuses a vectorized producer and redirects boundary channels" {
         expected[(y * 3 + x) * 9 + channel_index] = input[source_index] + 1;
     };
 
-    var model = loop_model.init();
+    var model = loop_model.Runtime.init();
     try model.copyInput(.input, &input);
     model.run();
     try std.testing.expectEqualSlices(f32, &expected, model.outputView(0).contiguousSlice().?);
@@ -103,11 +103,11 @@ const inferred_loop_model = model: {
     const shifted_left = b.shift(left, &.{ 0, 1, 0 }, .wrap);
     const shifted_right = b.shift(right, &.{ 0, -1, 0 }, .wrap);
     b.output(b.concat(&.{ shifted_left, shifted_right }, 2));
-    break :model b.finish().model();
+    break :model b.finish().executable();
 };
 
 test "slice shift concat remaps infer a loop plan" {
-    const graph = inferred_loop_model.executable;
+    const graph = inferred_loop_model.program;
     switch (graph.nodes[graph.node_ct - 1].?.op) {
         .compute => |compute| switch (compute) {
             .kernel => |kernel| switch (kernel) {
@@ -122,7 +122,7 @@ test "slice shift concat remaps infer a loop plan" {
         .view => return error.TestUnexpectedResult,
     }
 
-    var model = inferred_loop_model.init();
+    var model = inferred_loop_model.Runtime.init();
     try model.copyInput(.input, &.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 });
     model.run();
     try std.testing.expectEqualSlices(
@@ -141,11 +141,11 @@ const strided_model = model: {
     const input = b_sources.input(.input, .f32, &.{ 2, 3 });
     const transposed = b.transpose(input, 0, 1);
     b.output(b.shift(transposed, &.{ 0, 1 }, .wrap));
-    break :model b.finish().model();
+    break :model b.finish().executable();
 };
 
 test "shift reads a strided source view in logical coordinates" {
-    var model = strided_model.init();
+    var model = strided_model.Runtime.init();
     try model.copyInput(.input, &.{ 1, 2, 3, 4, 5, 6 });
     model.run();
     try std.testing.expectEqualSlices(f32, &.{ 4, 1, 5, 2, 6, 3 }, model.outputView(0).contiguousSlice().?);
@@ -159,11 +159,11 @@ const singleton_model = model: {
     const b_sources = b.sources(SingletonDefinitionSources);
     const input = b_sources.input(.input, .i8, &.{1});
     b.output(b.shift(input, &.{101}, .reflect));
-    break :model b.finish().model();
+    break :model b.finish().executable();
 };
 
 test "reflection of a singleton axis stays on its only element" {
-    var model = singleton_model.init();
+    var model = singleton_model.Runtime.init();
     try model.copyInput(.input, &.{42});
     model.run();
     try std.testing.expectEqualSlices(i8, &.{42}, model.outputView(0).contiguousSlice().?);

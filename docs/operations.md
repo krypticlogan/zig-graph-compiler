@@ -20,7 +20,7 @@ can expose accepted fields and scalar types:
 | `slice`                     | `SliceOptions`                                                                           |
 | `pad`                       | `PadOptions`                                                                             |
 | `windows`                   | `WindowOptions`                                                                          |
-| `modelWith`                 | `[]const SourceOverride`, whose entries contain a source-enum value and `Source.Binding` |
+| `executableWith`            | `ExecutableOptions`, including `.sources: []const SourceOverride` and executable selection preferences |
 
 Options may use inferred struct literals because the method signature supplies
 their concrete type. For example, a single-axis reduction is

@@ -1,5 +1,5 @@
 const Execution = @import("../../execution/execution.zig");
-const Executable = @import("../../execution/program.zig").Executable;
+const Program = @import("../../execution/program.zig").Program;
 const Graph = @import("../../core/graph.zig");
 const Semantic = @import("../../operations/semantic.zig");
 const Analysis = @import("../analysis/root.zig");
@@ -22,8 +22,8 @@ pub fn Lowering(comptime capacity: Graph.Capacity) type {
             comptime fusion_regions: FusionRegions,
             comptime remap_regions: RemapRegions,
             comptime contraction_strategies: [capacity.max_nodes]?ContractionPlanner.Plan.Strategy,
-        ) Executable(capacity, Execution.Op) {
-            var program: Executable(capacity, Execution.Op) = .init();
+        ) Program(capacity, Execution.Op) {
+            var program: Program(capacity, Execution.Op) = .init();
 
             for (0..source_graph.tensor_ct) |tensor_id| {
                 const info = source_graph.tensors[tensor_id].?;
@@ -104,7 +104,7 @@ pub fn Lowering(comptime capacity: Graph.Capacity) type {
         }
 
         fn insertInvocation(
-            program: *Executable(capacity, Execution.Op),
+            program: *Program(capacity, Execution.Op),
             comptime op: Execution.Op,
             comptime inputs: []const usize,
             comptime outputs: []const usize,

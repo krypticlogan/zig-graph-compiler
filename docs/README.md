@@ -9,12 +9,13 @@ runtime storage, supported operations, constraints, and tooling.
   source ownership, execution, and memory invariants.
 - [Operation semantics](operations.md) — shape, dtype, broadcasting,
   reduction, concatenation, and structural-view contracts.
-- [Model inspection](inspection.md) — writer-based representations and the
-  model-specific inspection CLI.
-- [Generated model artifacts](model-artifacts.md) — opaque model lifecycle,
+- [Executable inspection](inspection.md) — inspect compiled libraries or render
+  model representations to a writer.
+- [Generated model artifacts](executables.md) — opaque model lifecycle,
   versioned C ABI, libraries, and minimal executables.
-- [Python compiler package](python-compiler.md) — external Zig toolchains,
-  compiled-model caching, and the runtime/compiler boundary.
+- [Serialized graphs](zgir.md) — `.zgir` syntax, operations, and compilation.
+- [Python compiler package](executables.md#python-compiler) — external Zig
+  toolchains, compiled-model caching, and the runtime/compiler boundary.
 - [Development state](development-state.md) — implemented capabilities,
   limitations, and tests.
 - [Repository README](../README.md) — public API example and common commands.

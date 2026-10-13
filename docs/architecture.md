@@ -46,12 +46,12 @@ DefinitionBuilder ──► completed definition
                 Pareto pruning and selection
                             │
                             ▼
-                    executable Model type
+                    Executable type with Program and Runtime
 ```
 
-Calling `definition.model()` performs every stage after definition. Counting
+Calling `definition.executable()` performs every stage after definition. Counting
 and compiler-analysis steps are internal implementation details and are not
-exported as public model-building APIs.
+exported as public graph-building APIs.
 
 ## Definition
 
@@ -223,10 +223,10 @@ without adding rendering responsibilities to the model, graph, operation,
 tensor, or storage types. It also renders bounded mutable memory from a model
 instance when requested.
 
-`zgc_model_abi` specializes a versioned C ABI around a consumer-provided model
+`zgc_executable_abi` specializes a versioned C ABI around a consumer-provided model
 module. It exposes opaque placement initialization, source and output
 descriptors, copied or borrowed source loading, execution, and borrowed or
-copied output access. `zgc_model_runner` packages the same interface in a
+copied output access. `zgc_executable_runner` packages the same interface in a
 minimal executable for generated-code inspection. Artifact operations retain
 the model's compile-time geometry and selected executable schedule.
 
@@ -234,7 +234,7 @@ View nodes do not execute kernels. Their result layouts are resolved during
 graph construction, and downstream compute kernels receive static-geometry
 views into the aliased storage.
 
-`definition.modelWith(...)` accepts a typed slice of source-enum tags and
+`definition.executableWith(...)` accepts a typed slice of source-enum tags and
 storage bindings to select non-default storage.
 `zgc.memory.Source.embed(bytes)` accepts logical row-major parameter or constant bytes
 and compile-time packs them into the lowered source layout.
@@ -258,7 +258,7 @@ interpreter. Node selection and `ExecutableCompute` plan dispatch are explicit
 inline boundaries so compile-time tags disappear before code generation.
 Load, expression, address-resolution, and store helpers used inside an element
 loop are also inline where crossing the boundary would hide constants or block
-loop optimization. `Model.run`, tensor-view construction, and substantial
+loop optimization. `Executable.Runtime.run`, tensor-view construction, and substantial
 kernel bodies remain ordinary function boundaries; unselected implementations
 are never instantiated, and selected kernels may remain standalone functions
 when the boundary preserves all specialization information.

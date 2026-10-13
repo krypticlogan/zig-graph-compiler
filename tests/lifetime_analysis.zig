@@ -6,7 +6,7 @@ const Sources = enum(usize) { input };
 const Definition = zgc.DefinitionBuilder;
 
 test "lifetime analysis produces half-open intermediate intervals" {
-    const lifetimes = models.ReuseModel.lifetime_analysis.tensor_lifetimes;
+    const lifetimes = models.ReuseExecutable.lifetime_analysis.tensor_lifetimes;
 
     try std.testing.expect(lifetimes[0].isPersistent());
     try std.testing.expectEqual(@as(usize, 0), lifetimes[1].begin_node);
@@ -26,9 +26,9 @@ test "alias uses extend the lifetime of root storage" {
         builder.output(builder.relu(alias));
         break :blk builder.finish();
     };
-    const Model = definition.model();
-    const graph = Model.executable;
-    const lifetimes = Model.lifetime_analysis.tensor_lifetimes;
+    const Executable = definition.executable();
+    const graph = Executable.program;
+    const lifetimes = Executable.lifetime_analysis.tensor_lifetimes;
 
     try std.testing.expectEqual(graph.tensors[1].?.storage_tensor, graph.tensors[2].?.storage_tensor);
     try std.testing.expectEqual(lifetimes[1], lifetimes[2]);
@@ -46,8 +46,8 @@ test "output aliases make their root storage persistent" {
         builder.output(builder.transpose(root, 0, 1));
         break :blk builder.finish();
     };
-    const Model = definition.model();
-    const lifetimes = Model.lifetime_analysis.tensor_lifetimes;
+    const Executable = definition.executable();
+    const lifetimes = Executable.lifetime_analysis.tensor_lifetimes;
 
     try std.testing.expect(lifetimes[1].isPersistent());
     try std.testing.expect(lifetimes[2].isPersistent());

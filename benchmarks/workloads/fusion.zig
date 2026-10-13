@@ -19,7 +19,7 @@ const definition = blk: {
     break :blk builder.finish();
 };
 
-const Model = @import("benchmark_selection").model(definition, &.{
+const Executable = @import("benchmark_selection").executable(definition, &.{
     .{ .source = .lhs, .binding = zgc.memory.Source.bound },
     .{ .source = .rhs, .binding = zgc.memory.Source.bound },
     .{ .source = .bias, .binding = zgc.memory.Source.bound },
@@ -27,7 +27,7 @@ const Model = @import("benchmark_selection").model(definition, &.{
 
 pub const ZgcBenchmark = struct {
     const Self = @This();
-    pub const CompiledModel = Model;
+    pub const CompiledExecutable = Executable;
 
     pub const name = "graph/fusion/mul-add-sum/256x256";
     pub const default_iterations = 500;
@@ -36,14 +36,14 @@ pub const ZgcBenchmark = struct {
     pub const work_unit = "elements";
     pub const bytes_per_invocation: f64 = @sizeOf(f32) * (2 * element_count + columns + rows);
 
-    model: Model,
+    runtime: Executable.Runtime,
     lhs: [element_count]f32,
     rhs: [element_count]f32,
     bias: [columns]f32,
 
     pub fn init() Self {
         var result: Self = .{
-            .model = Model.init(),
+            .runtime = Executable.Runtime.init(),
             .lhs = undefined,
             .rhs = undefined,
             .bias = undefined,
@@ -55,26 +55,26 @@ pub const ZgcBenchmark = struct {
     }
 
     pub fn prepare(self: *Self) !void {
-        try self.model.bindInput(.lhs, &self.lhs);
-        try self.model.bindInput(.rhs, &self.rhs);
-        try self.model.bindInput(.bias, &self.bias);
+        try self.runtime.bindInput(.lhs, &self.lhs);
+        try self.runtime.bindInput(.rhs, &self.rhs);
+        try self.runtime.bindInput(.bias, &self.bias);
     }
 
     pub fn validate(self: *Self) !void {
-        self.model.run();
+        self.runtime.run();
         var expected: f32 = 0;
         for (0..columns) |column| {
             expected += lhsValue(0, column) * rhsValue(0, column) + biasValue(column);
         }
-        if (!std.math.approxEqAbs(f32, expected, self.model.outputView(0).get(.{0}), 1e-3)) {
+        if (!std.math.approxEqAbs(f32, expected, self.runtime.outputView(0).get(.{0}), 1e-3)) {
             return error.IncorrectResult;
         }
     }
 
     pub fn run(self: *Self, iterations: usize) void {
         for (0..iterations) |_| {
-            self.model.run();
-            std.mem.doNotOptimizeAway(self.model.outputView(0).storage);
+            self.runtime.run();
+            std.mem.doNotOptimizeAway(self.runtime.outputView(0).storage);
         }
     }
 };
@@ -130,7 +130,7 @@ fn directStep(state: *DirectBenchmark) void {
 }
 
 fn fillMatrix(comptime source: Sources, storage: *[element_count]f32, comptime valueFn: anytype) void {
-    const layout = Model.sourceLayout(source);
+    const layout = Executable.Runtime.sourceLayout(source);
     for (0..rows) |row| {
         for (0..columns) |column| {
             const offset: usize = @intCast(row * @as(usize, @intCast(layout.strides[0])) +

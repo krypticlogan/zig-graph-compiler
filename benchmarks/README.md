@@ -99,7 +99,7 @@ Timing alone cannot reveal cache hits, cache misses, or physical memory traffic;
 those require hardware counters or a profiler.
 
 The storage line reports the compiler's model-owned buffer plan (peak,
-persistent, and scratch bytes) and `@sizeOf(Model)` for the generated model
+persistent, and scratch bytes) and `@sizeOf(Executable)` for the generated model
 state. This is static storage accounting, not process RSS.
 Scratch is the peak buffer capacity beyond persistent storage. It covers the
 space needed for reusable intermediates and any alignment padding, so peak

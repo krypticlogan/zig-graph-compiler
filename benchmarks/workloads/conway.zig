@@ -8,7 +8,7 @@ const cell_count = width * height;
 const Sources = enum(usize) { world };
 const Definition = zgc.DefinitionBuilder;
 
-const Model = model: {
+const Executable = model: {
     var builder = Definition.init();
     const builder_sources = builder.sources(Sources);
     const world = builder_sources.input(.world, .bool, &.{ height, width });
@@ -30,7 +30,7 @@ const Model = model: {
         builder.equal(neighbor_count, three),
         builder.logicalAnd(world, builder.equal(neighbor_count, two)),
     ));
-    break :model @import("benchmark_selection").model(builder.finish(), &.{.{
+    break :model @import("benchmark_selection").executable(builder.finish(), &.{.{
         .source = .world,
         .binding = zgc.memory.Source.bound,
     }});
@@ -38,7 +38,7 @@ const Model = model: {
 
 pub const ZgcBenchmark = struct {
     const Self = @This();
-    pub const CompiledModel = Model;
+    pub const CompiledExecutable = Executable;
 
     pub const name = "graph/application/conway/120x88/zgc";
     pub const default_iterations = 100;
@@ -47,30 +47,30 @@ pub const ZgcBenchmark = struct {
     pub const work_unit = "cells";
     pub const bytes_per_invocation: f64 = 2 * cell_count;
 
-    model: Model,
+    runtime: Executable.Runtime,
     world: [cell_count]bool,
 
     pub fn init() Self {
-        var result: Self = .{ .model = Model.init(), .world = undefined };
+        var result: Self = .{ .runtime = Executable.Runtime.init(), .world = undefined };
         initializeWorld(&result.world);
         return result;
     }
 
     pub fn prepare(self: *Self) !void {
-        try self.model.bindInput(.world, &self.world);
+        try self.runtime.bindInput(.world, &self.world);
     }
 
     pub fn validate(self: *Self) !void {
-        self.model.run();
+        self.runtime.run();
         var expected: [cell_count]bool = undefined;
         directStep(&self.world, &expected);
-        if (!std.mem.eql(bool, &expected, self.model.outputView(0).storage)) return error.IncorrectResult;
+        if (!std.mem.eql(bool, &expected, self.runtime.outputView(0).storage)) return error.IncorrectResult;
     }
 
     pub fn run(self: *Self, iterations: usize) void {
         for (0..iterations) |_| {
-            self.model.run();
-            std.mem.doNotOptimizeAway(self.model.outputView(0).storage);
+            self.runtime.run();
+            std.mem.doNotOptimizeAway(self.runtime.outputView(0).storage);
         }
     }
 };

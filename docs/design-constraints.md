@@ -29,14 +29,14 @@ and execution.
 
 ## Source ownership
 
-Every graph source has one storage policy. `definition.modelWith` accepts a
-typed slice of `.source` and `.binding` overrides:
+Every graph source has one storage policy. `definition.executableWith` accepts
+options containing typed `.source` and `.binding` overrides:
 
 ```zig
-const Model = definition.modelWith(&.{
+const Executable = definition.executableWith(.{ .sources = &.{
     .{ .source = .input, .binding = zgc.memory.Source.bound },
     .{ .source = .weights, .binding = zgc.memory.Source.embed(weights_bytes) },
-});
+} });
 ```
 
 - Owned sources receive an aligned region in model memory and are populated

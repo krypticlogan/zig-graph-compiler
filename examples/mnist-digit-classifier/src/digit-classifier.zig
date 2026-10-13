@@ -8,7 +8,7 @@ pub const hidden_size_2 = 64;
 pub const output_size = 10;
 
 // Source keys form the typed boundary between the graph and storage supplied
-// either by the caller or by the model's parameter package.
+// either by the caller or by the runtime's parameter package.
 pub const Sources = enum(usize) {
     input,
     w1,
@@ -66,7 +66,7 @@ pub const definition = blk: {
 
 // Inputs remain caller-owned and replaceable, while immutable parameters are
 // embedded into the executable and available for compile-time source packing.
-pub const Model = definition.modelWith(&.{
+pub const Executable = definition.executableWith(.{ .sources = &.{
     .{ .source = .input, .binding = zgc.memory.Source.bound },
     .{ .source = .w1, .binding = zgc.memory.Source.embed(params.w1) },
     .{ .source = .b1, .binding = zgc.memory.Source.embed(params.b1) },
@@ -74,10 +74,10 @@ pub const Model = definition.modelWith(&.{
     .{ .source = .b2, .binding = zgc.memory.Source.embed(params.b2) },
     .{ .source = .w3, .binding = zgc.memory.Source.embed(params.w3) },
     .{ .source = .b3, .binding = zgc.memory.Source.embed(params.b3) },
-});
+} });
 
-pub fn bindInput(model: *Model, input: *const [input_size]f32) void {
+pub fn bindInput(runtime: *Executable.Runtime, input: *const [input_size]f32) void {
     // Binding supplies only runtime storage; its dtype and geometry were fixed
     // by the definition above.
-    model.bindInput(.input, input) catch unreachable;
+    runtime.bindInput(.input, input) catch unreachable;
 }

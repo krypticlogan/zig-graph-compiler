@@ -31,14 +31,14 @@ Consequently, the six parameters (437,544 bytes total) and the input receive no
 memory-plan regions. Lifetime-based reuse reserves 1,024 bytes for the
 network's nine intermediate/output tensors.
 
-## Model inspection
+## Executable inspection
 
 ```sh
 zig build inspect
 ```
 
 The model-specific `zgc-inspect` executable uses the library inspection CLI and
-the `Model` exported from `src/digit-classifier.zig`. With no argument it prints
+the `Executable` exported from `src/digit-classifier.zig`. With no argument it prints
 the exact capacity, tensor and operation listing, output-oriented graph tree,
 and memory plan. Individual representations can be selected after `--`:
 
@@ -49,60 +49,60 @@ zig build inspect -- tree
 zig build inspect -- memory-plan
 ```
 
-See [model inspection](../../docs/inspection.md) for the programmatic API and for
-wiring the CLI to another generated model.
+See [executable inspection](../../docs/inspection.md) for the programmatic API and for
+wiring the CLI to another generated executable.
 
-## Generated model artifact
+## Generated executable artifact
 
 Build the binary used for generated-code inspection:
 
 ```sh
-zig build build-model -Doptimize=ReleaseFast
+zig build build-executable -Doptimize=ReleaseFast
 ```
 
-The resulting artifact is `zig-out/bin/zgc-model`. It uses ZGC's
-`zgc_model_runner` module and the `Model` exported from
-`src/digit-classifier.zig`. Its exported `zgc_model_run` symbol contains model
+The resulting artifact is `zig-out/bin/zgc-executable`. It uses ZGC's
+`zgc_executable_runner` module and the `Executable` exported from
+`src/digit-classifier.zig`. Its exported `zgc_runtime_run` symbol contains runtime
 execution without logging, timing, input generation, or output formatting. The
 executable entry point performs no inference because runtime input binding
 belongs to the host application.
 
-Build the same model as a shared library exposing the complete C ABI:
+Build the same executable as a shared library exposing the complete C ABI:
 
 ```sh
-zig build build-model-library -Doptimize=ReleaseFast
+zig build build-executable-library -Doptimize=ReleaseFast
 ```
 
-The host can discover source and output metadata, initialize opaque model
-storage, copy or bind sources, execute the model, and borrow or copy outputs.
+The host can discover source and output metadata, initialize opaque runtime
+storage, copy or bind sources, run the program, and borrow or copy outputs.
 
 Disassemble only the stable execution symbol:
 
 ```sh
-zig build disassemble-model -Doptimize=ReleaseFast
+zig build disassemble-executable -Doptimize=ReleaseFast
 ```
 
 On macOS, inspect it interactively with LLDB:
 
 ```text
-lldb zig-out/bin/zgc-model
-(lldb) image lookup --name zgc_model_run
-(lldb) disassemble --name zgc_model_run
+lldb zig-out/bin/zgc-executable
+(lldb) image lookup --name zgc_runtime_run
+(lldb) disassemble --name zgc_runtime_run
 ```
 
-See [generated model artifacts](../../docs/model-artifacts.md) for the host
+See [generated executable artifacts](../../docs/executables.md) for the host
 lifecycle, C header, source policies, and build integration.
 
-## Model definitions
+## Executable definitions
 
 `src/digit-classifier.zig` uses the public workflow expected of a consumer:
 
 1. Instantiate the concrete `DefinitionBuilder` and request a typed source
    facade with `builder.sources(Sources)`.
 2. Define the graph once.
-3. Finish the definition and call `definition.modelWith(...)` to select bound
+3. Finish the definition and call `definition.executableWith(...)` to select bound
    and embedded source storage.
-4. Initialize the generated model, bind a runtime input, run, and retrieve an
+4. Initialize `Executable.Runtime`, bind a runtime input, run, and retrieve an
    output view.
 
 The digit classifier composes its three dense stages with `zgc.ext.nn.Dense`

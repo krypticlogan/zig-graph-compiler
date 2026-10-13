@@ -3,11 +3,11 @@ const Analysis = @import("analysis/root.zig");
 const Search = @import("search.zig");
 const SemanticOptimization = @import("semantic_optimization.zig");
 const validation = @import("validation.zig");
-const Model = @import("../core/model.zig").Model;
+const Executable = @import("../core/executable.zig").Executable;
 const Source = @import("../storage/source.zig");
 
-/// Run the compilation steps from a completed definition to a generated model.
-pub fn model(
+/// Compile a completed definition into an executable.
+pub fn executable(
     comptime Definition: type,
     comptime definition: Definition,
     comptime source_configuration: anytype,
@@ -48,8 +48,8 @@ pub fn model(
         source_configuration,
     );
     const selected_candidate = executable_search.selected(selection);
-    const executable = selected_candidate.executable;
-    const FinalValidated = validation.FinalValidation(capacity).validate(executable);
+    const program = selected_candidate.executable;
+    const FinalValidated = validation.FinalValidation(capacity).validate(program);
     const graph = FinalValidated.graph;
 
     const lifetime_analysis = Search.LifetimeAnalysis().analyze(FinalValidated);
@@ -59,7 +59,7 @@ pub fn model(
         graph,
         source_configuration,
     );
-    return Model(
+    return Executable(
         Definition.Source,
         capacity,
         raw_graph,

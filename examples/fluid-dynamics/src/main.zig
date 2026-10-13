@@ -23,11 +23,11 @@ pub fn main() void {
     defer rl.closeWindow();
     rl.setTargetFPS(60);
 
-    var model = fluid.FluidSmokeStep.init();
-    model.copySource(.cx, &cx) catch unreachable;
-    model.copySource(.cy, &cy) catch unreachable;
-    model.copySource(.fluid_weights, &fluid_weights) catch unreachable;
-    model.copySource(.smoke_weights, &smoke_weights) catch unreachable;
+    var runtime = fluid.FluidSmokeStep.Runtime.init();
+    runtime.copySource(.cx, &cx) catch unreachable;
+    runtime.copySource(.cy, &cy) catch unreachable;
+    runtime.copySource(.fluid_weights, &fluid_weights) catch unreachable;
+    runtime.copySource(.smoke_weights, &smoke_weights) catch unreachable;
 
     var populations: [population_count]f32 = undefined;
     var smoke_populations: [smoke_population_count]f32 = @splat(0);
@@ -39,7 +39,7 @@ pub fn main() void {
     var omega: f32 = 1.0;
     const smoke_omega: f32 = 1.2;
     const smoke_retention: f32 = 0.997;
-    advance(&model, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
+    advance(&runtime, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
 
     var running = true;
     var step_count: u64 = 1;
@@ -62,21 +62,21 @@ pub fn main() void {
             smoke_populations = @splat(0);
             force_x = @splat(0);
             force_y = @splat(0);
-            advance(&model, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
+            advance(&runtime, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
             step_count = 1;
         } else if (rl.isKeyPressed(.n)) {
-            advance(&model, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
+            advance(&runtime, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
             step_count += 1;
             running = false;
         } else if (running) {
-            advance(&model, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
+            advance(&runtime, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
             step_count += 1;
         }
 
-        const smoke = model.outputView(2).contiguousSlice().?;
-        const density = model.outputView(3).contiguousSlice().?;
-        const velocity_x = model.outputView(4).contiguousSlice().?;
-        const velocity_y = model.outputView(5).contiguousSlice().?;
+        const smoke = runtime.outputView(2).contiguousSlice().?;
+        const density = runtime.outputView(3).contiguousSlice().?;
+        const velocity_x = runtime.outputView(4).contiguousSlice().?;
+        const velocity_y = runtime.outputView(5).contiguousSlice().?;
 
         rl.beginDrawing();
         defer rl.endDrawing();
@@ -93,7 +93,7 @@ pub fn main() void {
 }
 
 fn advance(
-    model: *fluid.FluidSmokeStep,
+    runtime: *fluid.FluidSmokeStep.Runtime,
     populations: *[population_count]f32,
     smoke_populations: *[smoke_population_count]f32,
     smoke_injection: *const [cell_count]f32,
@@ -103,17 +103,17 @@ fn advance(
     smoke_omega: f32,
     smoke_retention: f32,
 ) void {
-    model.copyInput(.f, populations) catch unreachable;
-    model.copyInput(.smoke_g, smoke_populations) catch unreachable;
-    model.copyInput(.smoke_injection, smoke_injection) catch unreachable;
-    model.copyInput(.force_x, force_x) catch unreachable;
-    model.copyInput(.force_y, force_y) catch unreachable;
-    model.copyInput(.omega, &.{omega}) catch unreachable;
-    model.copyInput(.smoke_omega, &.{smoke_omega}) catch unreachable;
-    model.copyInput(.smoke_retention, &.{smoke_retention}) catch unreachable;
-    model.run();
-    @memcpy(populations, model.outputView(0).contiguousSlice().?);
-    @memcpy(smoke_populations, model.outputView(1).contiguousSlice().?);
+    runtime.copyInput(.f, populations) catch unreachable;
+    runtime.copyInput(.smoke_g, smoke_populations) catch unreachable;
+    runtime.copyInput(.smoke_injection, smoke_injection) catch unreachable;
+    runtime.copyInput(.force_x, force_x) catch unreachable;
+    runtime.copyInput(.force_y, force_y) catch unreachable;
+    runtime.copyInput(.omega, &.{omega}) catch unreachable;
+    runtime.copyInput(.smoke_omega, &.{smoke_omega}) catch unreachable;
+    runtime.copyInput(.smoke_retention, &.{smoke_retention}) catch unreachable;
+    runtime.run();
+    @memcpy(populations, runtime.outputView(0).contiguousSlice().?);
+    @memcpy(smoke_populations, runtime.outputView(1).contiguousSlice().?);
 }
 
 fn updateForces(

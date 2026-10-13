@@ -30,11 +30,11 @@ const copy_model = model: {
     const builder_sources = builder.sources(Sources);
     const input = builder_sources.input(.input, .f32, &.{ 2, 3 });
     builder.output(builder.copy(builder.transpose(input, 0, 1)));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "compiled copy materialization owns fresh lowered storage" {
-    const graph = copy_model.executable;
+    const graph = copy_model.program;
     const transposed = graph.tensors[1].?;
     const materialized = graph.tensors[2].?;
 
@@ -42,7 +42,7 @@ test "compiled copy materialization owns fresh lowered storage" {
     try std.testing.expectEqual(@as(usize, 2), materialized.storage_tensor);
     try std.testing.expectEqual([2]isize{ 2, 1 }, materialized.layout.strides[0..2].*);
 
-    var model = copy_model.init();
+    var model = copy_model.Runtime.init();
     try model.copyInput(.input, &.{ 1, 2, 3, 4, 5, 6 });
     model.run();
     try std.testing.expectEqualSlices(f32, &.{ 1, 4, 2, 5, 3, 6 }, model.outputView(0).storage);

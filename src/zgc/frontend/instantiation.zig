@@ -5,7 +5,16 @@ const def = @import("definition.zig");
 const Dtype = @import("../storage/dtype.zig").Dtype;
 const Source = @import("../storage/source.zig");
 
-pub fn modelFromZgir(comptime text: []const u8) type {
+pub const ZgirExecutableOptions = struct {
+    target: @import("../compiler/search.zig").OptimizationTarget = .balanced,
+    frontier_index: ?usize = null,
+};
+
+pub fn executableFromZgir(comptime text: []const u8) type {
+    return executableFromZgirWithOptions(text, .{});
+}
+
+pub fn executableFromZgirWithOptions(comptime text: []const u8, comptime options: ZgirExecutableOptions) type {
     @setEvalBranchQuota(10_000_000);
     validateHeader(text);
     const names = sourceNames(text);
@@ -43,7 +52,10 @@ pub fn modelFromZgir(comptime text: []const u8) type {
     const definition = builder.finish();
     const Definition = @TypeOf(definition);
     const bound_count = boundCount(text);
-    if (bound_count == 0) return definition.model();
+    if (bound_count == 0) return definition.executableWith(.{
+        .target = options.target,
+        .frontier_index = options.frontier_index,
+    });
     var overrides: [bound_count]Definition.SourceOverride = undefined;
     lines = std.mem.splitScalar(u8, text, '\n');
     _ = lines.next();
@@ -62,7 +74,11 @@ pub fn modelFromZgir(comptime text: []const u8) type {
         }
         source_index += 1;
     }
-    return definition.modelWith(&overrides);
+    return definition.executableWith(.{
+        .sources = &overrides,
+        .target = options.target,
+        .frontier_index = options.frontier_index,
+    });
 }
 
 fn replay(comptime b: *def.DefinitionBuilder, comptime c: Call, comptime v: []const def.Value) def.Value {

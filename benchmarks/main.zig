@@ -38,7 +38,7 @@ pub fn main(init: std.process.Init) !void {
                 .cpu_model = builtin.target.cpu.model.name,
                 .zig_version = builtin.zig_version_string,
             },
-            .selection = selectionRecord(Workload.ZgcBenchmark.CompiledModel),
+            .selection = selectionRecord(Workload.ZgcBenchmark.CompiledExecutable),
             .configuration = .{
                 .runs = run_count,
                 .iterations_per_sample = zgc_result.iterations,
@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
             },
             .zgc = benchmarkRecord(Workload.ZgcBenchmark, zgc_result),
             .direct = benchmarkRecord(Workload.DirectBenchmark, direct_result),
-            .calibration = calibrationRecord(Workload.ZgcBenchmark.CompiledModel, zgc_result.average_ns),
+            .calibration = calibrationRecord(Workload.ZgcBenchmark.CompiledExecutable, zgc_result.average_ns),
             .direct_over_zgc = speed_ratio,
         });
         std.debug.print("  JSON record    {s}\n", .{build_options.results_file});
@@ -78,7 +78,7 @@ const MemoryRecord = struct {
     planned_peak_bytes: usize,
     persistent_bytes: usize,
     scratch_bytes: usize,
-    model_state_bytes: usize,
+    runtime_state_bytes: usize,
 };
 
 const CostRecord = struct {
@@ -264,13 +264,13 @@ fn runBenchmark(comptime Selected: type, init: std.process.Init) !BenchmarkResul
     }
     if (comptime @hasDecl(Selected, "parameter_count")) {
         std.debug.print(
-            "  model          {d} parameters | batch {d}\n",
+            "  graph          {d} parameters | batch {d}\n",
             .{ Selected.parameter_count, Selected.batch },
         );
     }
-    if (comptime @hasDecl(Selected, "CompiledModel")) {
-        const Model = Selected.CompiledModel;
-        const choice = Model.selected_executable_candidate;
+    if (comptime @hasDecl(Selected, "CompiledExecutable")) {
+        const Executable = Selected.CompiledExecutable;
+        const choice = Executable.selected_executable_candidate;
         const cost = choice.cost;
         const estimated_traffic_bytes = cost.memory_traffic.bytes_read + cost.memory_traffic.bytes_written;
         const implied_traffic_gib_per_second = @as(f64, @floatFromInt(estimated_traffic_bytes)) /
@@ -283,21 +283,21 @@ fn runBenchmark(comptime Selected: type, init: std.process.Init) !BenchmarkResul
                 regimeName(choice.fusion_regime),
                 regimeName(choice.layout_regime),
                 regimeName(choice.remap_regime),
-                Model.executable.node_ct,
+                Executable.program.node_ct,
             },
         );
         std.debug.print(
             "  selection      {s} | frontier index {d}/{d}{s}\n",
             .{
-                @tagName(Model.selection_options.target),
-                Model.selected_executable_candidate_index,
-                Model.executable_candidate_frontier.count,
-                if (Model.selection_options.frontier_index != null) " (forced)" else "",
+                @tagName(Executable.selection_options.target),
+                Executable.selected_executable_candidate_index,
+                Executable.executable_candidate_frontier.count,
+                if (Executable.selection_options.frontier_index != null) " (forced)" else "",
             },
         );
-        std.debug.print("  fingerprint    exec-v1-{x:0>16}\n", .{Model.structural_fingerprint});
+        std.debug.print("  fingerprint    exec-v1-{x:0>16}\n", .{Executable.structural_fingerprint});
         if (comptime build_options.show_frontier) {
-            inline for (Model.executable_candidate_frontier.candidates[0..Model.executable_candidate_frontier.count], 0..) |entry, index| {
+            inline for (Executable.executable_candidate_frontier.candidates[0..Executable.executable_candidate_frontier.count], 0..) |entry, index| {
                 const candidate = entry.?;
                 std.debug.print(
                     "    [{d}] {s} | schedule {s} | fusion {s} | layout {s} | remap {s} | work {d} | peak {d} B | code {d} | exec-v1-{x:0>16}\n",
@@ -319,7 +319,7 @@ fn runBenchmark(comptime Selected: type, init: std.process.Init) !BenchmarkResul
         std.debug.print(
             \\  cost estimate  {d} work units | arithmetic {d} | access {d} | registers {d} | transfer {d}
             \\  traffic est.   read {d} B | write {d} B | {d:.3} GiB/s implied by latency
-            \\  storage plan   peak {d} B | persistent {d} B | scratch {d} B | model state {d} B
+            \\  storage plan   peak {d} B | persistent {d} B | scratch {d} B | runtime state {d} B
             \\  code estimate  {d} units
             \\
         , .{
@@ -334,7 +334,7 @@ fn runBenchmark(comptime Selected: type, init: std.process.Init) !BenchmarkResul
             cost.peak_memory_bytes,
             cost.persistent_memory_bytes,
             cost.scratch_memory_bytes,
-            @sizeOf(Model),
+            @sizeOf(Executable.Runtime),
             cost.code_size_units,
         });
         if (cost.estimated_runtime_work != 0) {
@@ -364,21 +364,21 @@ fn runBenchmark(comptime Selected: type, init: std.process.Init) !BenchmarkResul
     };
 }
 
-fn selectionRecord(comptime Model: type) SelectionRecord {
-    const choice = Model.selected_executable_candidate;
+fn selectionRecord(comptime Executable: type) SelectionRecord {
+    const choice = Executable.selected_executable_candidate;
     const cost = choice.cost;
     return .{
-        .target = @tagName(Model.selection_options.target),
-        .frontier_index = Model.selected_executable_candidate_index,
-        .automatic_frontier_index = Model.executable_candidate_frontier.bestIndex(Model.selection_options.target),
-        .frontier_count = Model.executable_candidate_frontier.count,
-        .forced = Model.selection_options.frontier_index != null,
+        .target = @tagName(Executable.selection_options.target),
+        .frontier_index = Executable.selected_executable_candidate_index,
+        .automatic_frontier_index = Executable.executable_candidate_frontier.bestIndex(Executable.selection_options.target),
+        .frontier_count = Executable.executable_candidate_frontier.count,
+        .forced = Executable.selection_options.frontier_index != null,
         .origin = @tagName(choice.origin),
         .schedule = @tagName(choice.schedule),
         .fusion = regimeName(choice.fusion_regime),
         .layout = regimeName(choice.layout_regime),
         .remap = regimeName(choice.remap_regime),
-        .node_count = Model.executable.node_ct,
+        .node_count = Executable.program.node_ct,
         .cost = .{
             .estimated_runtime_work = cost.estimated_runtime_work,
             .arithmetic_work = cost.arithmetic_work,
@@ -393,16 +393,16 @@ fn selectionRecord(comptime Model: type) SelectionRecord {
                 .planned_peak_bytes = cost.peak_memory_bytes,
                 .persistent_bytes = cost.persistent_memory_bytes,
                 .scratch_bytes = cost.scratch_memory_bytes,
-                .model_state_bytes = @sizeOf(Model),
+                .runtime_state_bytes = @sizeOf(Executable.Runtime),
             },
             .code_size_units = cost.code_size_units,
         },
-        .structure = structureRecord(Model),
+        .structure = structureRecord(Executable),
     };
 }
 
-fn structureRecord(comptime Model: type) StructureRecord {
-    const graph = Model.executable;
+fn structureRecord(comptime Executable: type) StructureRecord {
+    const graph = Executable.program;
     const nodes = comptime blk: {
         var records: [graph.node_ct]NodeRecord = undefined;
         for (graph.nodes[0..graph.node_ct], 0..) |node, index| {
@@ -435,7 +435,7 @@ fn structureRecord(comptime Model: type) StructureRecord {
         break :blk records;
     };
     return .{
-        .fingerprint = std.fmt.comptimePrint("exec-v1-{x:0>16}", .{Model.structural_fingerprint}),
+        .fingerprint = std.fmt.comptimePrint("exec-v1-{x:0>16}", .{Executable.structural_fingerprint}),
         .nodes = &nodes,
         .tensors = &tensors,
     };
@@ -562,8 +562,8 @@ fn benchmarkRecord(comptime Selected: type, result: BenchmarkResult) BenchmarkRe
     };
 }
 
-fn calibrationRecord(comptime Model: type, average_ns: f64) CalibrationRecord {
-    const cost = Model.selected_executable_candidate.cost;
+fn calibrationRecord(comptime Executable: type, average_ns: f64) CalibrationRecord {
+    const cost = Executable.selected_executable_candidate.cost;
     const estimated_traffic = cost.memory_traffic.bytes_read + cost.memory_traffic.bytes_written;
     return .{
         .observed_ns_per_work_unit = if (cost.estimated_runtime_work == 0)

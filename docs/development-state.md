@@ -30,7 +30,7 @@ on Zig 0.17.0. The API should still be expected to change.
 ### Definition and compilation
 
 - A concrete, typed `DefinitionBuilder` is the public model-builder.
-- Models are defined once and compiled with `definition.model()`.
+- Graphs are defined once and compiled with `definition.executable()`.
 - Internal counting derives exact capacities within configurable definition
   bounds.
 - Raw graph construction preserves definition tensor IDs, source indices,
@@ -57,7 +57,7 @@ on Zig 0.17.0. The API should still be expected to change.
 - Segmented maps can compose a compatible pointwise producer into their source
   access, removing the producer store, owned intermediate, and alias-only view
   invocations.
-- Generated model types retain raw and compact semantic graphs, rewrite
+- Generated executable types retain raw and compact semantic graphs, rewrite
   provenance, the active executable, a legal reference candidate, the
   candidate frontier, and deterministic selection metadata for inspection.
   Use counts, output markers, consumer edges, and deterministic topological

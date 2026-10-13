@@ -4,9 +4,9 @@ const ScalarValue = @import("dtype.zig").ScalarValue;
 
 /// Compile-time storage selection for a graph source.
 pub const Binding = union(enum) {
-    /// Reserve storage in the model's inline memory.
+    /// Reserve storage in the runtime's inline memory.
     owned,
-    /// Borrow storage supplied to a model instance at runtime.
+    /// Borrow storage supplied to a runtime instance.
     bound,
     /// Read immutable bytes from the executable's read-only data. Logical
     /// bytes are packed into the layout selected during lowering; physical
@@ -36,13 +36,13 @@ pub fn embed(comptime bytes: []const u8) Binding {
 }
 
 /// Embed values which are already stored in the physical order reported by
-/// the compiled model's source layout.
+/// the executable's source layout.
 pub fn embedPacked(comptime bytes: []const u8) Binding {
     return .{ .embedded = .{ .bytes = bytes, .order = .physical } };
 }
 
 /// Normalize a named source configuration into the graph's enum-indexed source
-/// table. Unspecified sources remain model-owned.
+/// table. Unspecified sources remain runtime-owned.
 pub fn Plan(
     comptime SourceKey: type,
     comptime capacity: Graph.Capacity,

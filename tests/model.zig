@@ -2,7 +2,7 @@ const std = @import("std");
 const models = @import("fixtures/models.zig");
 
 test "model executes a compiled graph and exposes static output geometry" {
-    var model = models.BasicModel.init();
+    var model = models.BasicExecutable.Runtime.init();
     const input = [_]f32{ -1, 2, -3, 4, -5, 6 };
     try model.copyInput(.input, &input);
     model.run();
@@ -15,10 +15,10 @@ test "model executes a compiled graph and exposes static output geometry" {
 }
 
 test "filled tensors alias one embedded scalar without model memory" {
-    var model = models.FullModel.init();
+    var model = models.FullExecutable.Runtime.init();
     model.run();
 
-    try std.testing.expectEqual(@as(usize, 0), models.FullModel.memory_plan.byte_count);
+    try std.testing.expectEqual(@as(usize, 0), models.FullExecutable.memory_plan.byte_count);
     const output = model.outputView(0);
     try std.testing.expectEqual([2]usize{ 2, 3 }, output.shape);
     try std.testing.expectEqual([2]isize{ 0, 0 }, output.strides);
@@ -32,12 +32,12 @@ test "filled tensors alias one embedded scalar without model memory" {
 test "embedded parameters support copied and borrowed runtime inputs" {
     const expected = [_]f32{ 3, 1, 3.5, 7 };
 
-    var copied = models.EmbeddedParameterModel.init();
+    var copied = models.EmbeddedParameterExecutable.Runtime.init();
     try copied.copyInput(.input, &[_]f32{ 1, 2, 3, 4 });
     copied.run();
     try std.testing.expectEqualSlices(f32, &expected, copied.outputView(0).storage);
 
-    var borrowed = models.BoundInputModel.init();
+    var borrowed = models.BoundInputExecutable.Runtime.init();
     var input = [_]f32{ 1, 2, 3, 4 };
     try borrowed.bindInput(.input, &input);
     borrowed.run();
@@ -54,22 +54,22 @@ test "one lowered matmul definition supports copied and embedded storage" {
     }
     const weights = [_]f32{ 1, 2, 3, 4, 5, 6 };
 
-    var copied = models.MatmulModel.init();
+    var copied = models.MatmulExecutable.Runtime.init();
     try copied.copyInput(.input, &input);
     try copied.copySource(.weights, &weights);
     copied.run();
 
-    var embedded = models.EmbeddedMatmulModel.init();
+    var embedded = models.EmbeddedMatmulExecutable.Runtime.init();
     try embedded.copyInput(.input, &input);
     embedded.run();
 
-    var packed_model = models.PackedMatmulModel.init();
+    var packed_model = models.PackedMatmulExecutable.Runtime.init();
     try packed_model.copyInput(.input, &input);
     packed_model.run();
 
     try std.testing.expectEqual(
         [2]isize{ 1, models.matmul_batch },
-        models.MatmulModel.sourceLayout(.input).strides[0..2].*,
+        models.MatmulExecutable.Runtime.sourceLayout(.input).strides[0..2].*,
     );
     for (0..models.matmul_batch) |row| {
         const expected = [2]f32{ @floatFromInt(row + 2), @floatFromInt(2 * row + 4) };

@@ -17,17 +17,17 @@ pub fn main() void {
     defer rl.closeWindow();
     rl.setTargetFPS(120);
 
-    var model = classifier.Model.init();
+    var runtime = classifier.Executable.Runtime.init();
     var canvas: [classifier.input_size]f32 = @splat(0);
     var predictions: [classifier.output_size]f32 = @splat(0);
 
-    classifier.bindInput(&model, &canvas);
-    updatePredictions(&model, &predictions);
+    classifier.bindInput(&runtime, &canvas);
+    updatePredictions(&runtime, &predictions);
 
     while (!rl.windowShouldClose()) {
         if (rl.isKeyPressed(.enter) or rl.isKeyPressed(.kp_enter)) {
             canvas = @splat(0);
-            updatePredictions(&model, &predictions);
+            updatePredictions(&runtime, &predictions);
         }
 
         if (rl.isMouseButtonDown(.left)) {
@@ -45,7 +45,7 @@ pub fn main() void {
                 if (x + 1 < resolution) paint(&canvas, x + 1, y, 0.10);
                 if (y > 0) paint(&canvas, x, y - 1, 0.10);
                 if (y + 1 < resolution) paint(&canvas, x, y + 1, 0.10);
-                updatePredictions(&model, &predictions);
+                updatePredictions(&runtime, &predictions);
             }
         }
 
@@ -63,11 +63,11 @@ fn paint(canvas: *[classifier.input_size]f32, x: usize, y: usize, amount: f32) v
 }
 
 fn updatePredictions(
-    model: *classifier.Model,
+    runtime: *classifier.Executable.Runtime,
     predictions: *[classifier.output_size]f32,
 ) void {
-    model.run();
-    const output = model.outputView(0);
+    runtime.run();
+    const output = runtime.outputView(0);
     for (predictions, 0..) |*prediction, digit| {
         prediction.* = output.get(.{ 0, digit });
     }

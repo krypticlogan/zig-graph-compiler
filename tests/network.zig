@@ -26,12 +26,12 @@ const definition = blk: {
     builder.output(Classifier.apply(&builder, input));
     break :blk builder.finish();
 };
-const Model = definition.model();
+const Executable = definition.executable();
 
 test "dense layers build a sequential core graph" {
-    const graph = Model.executable;
+    const graph = Executable.program;
 
-    try std.testing.expectEqual(@as(usize, 6), Model.semantic_graph.node_ct);
+    try std.testing.expectEqual(@as(usize, 6), Executable.semantic_graph.node_ct);
     try std.testing.expectEqual(@as(usize, 5), graph.node_ct);
     switch (graph.nodes[1].?.op.compute.kernel) {
         .map => |plan| try std.testing.expectEqual(
@@ -51,7 +51,7 @@ test "dense layers build a sequential core graph" {
 }
 
 test "dense sequential model executes through core kernels" {
-    var model = Model.init();
+    var model = Executable.Runtime.init();
     const input = [_]f32{ 4, 5, -2, 1 };
     const identity = [_]f32{ 1, 0, 0, 1 };
     const first_bias = [_]f32{ 1, -2 };
@@ -88,7 +88,7 @@ test "dense output-input weights create an aliasing transpose" {
         builder.output(layer.apply(&builder, input));
         break :blk builder.finish();
     };
-    const graph = layout_definition.model().executable;
+    const graph = layout_definition.executable().program;
 
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, graph.tensors[1].?.shape.slice());
     try std.testing.expectEqualSlices(usize, &.{ 3, 2 }, graph.tensors[2].?.shape.slice());

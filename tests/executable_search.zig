@@ -3,24 +3,24 @@ const zgc = @import("zgc");
 const models = @import("fixtures/models.zig");
 
 test "executable search combines analysis alternatives and schedule variants" {
-    const Model = models.MatmulModel;
+    const Executable = models.MatmulExecutable;
 
-    try std.testing.expectEqual(@as(usize, 1), Model.fusion_candidate_count);
-    try std.testing.expect(Model.layout_candidate_count >= 2);
-    try std.testing.expectEqual(@as(usize, 4), Model.contraction_candidate_count);
-    try std.testing.expect(Model.representation_candidate_count > 8);
-    try std.testing.expect(Model.generated_contraction_strategies[3]); // scalar
+    try std.testing.expectEqual(@as(usize, 1), Executable.fusion_candidate_count);
+    try std.testing.expect(Executable.layout_candidate_count >= 2);
+    try std.testing.expectEqual(@as(usize, 4), Executable.contraction_candidate_count);
+    try std.testing.expect(Executable.representation_candidate_count > 8);
+    try std.testing.expect(Executable.generated_contraction_strategies[3]); // scalar
     var strategy_count: usize = 0;
-    for (Model.generated_contraction_strategies) |generated| {
+    for (Executable.generated_contraction_strategies) |generated| {
         if (generated) strategy_count += 1;
     }
     try std.testing.expect(strategy_count >= 2);
     try std.testing.expectEqual(
-        3 * (Model.representation_candidate_count + 1),
-        Model.executable_candidate_count,
+        3 * (Executable.representation_candidate_count + 1),
+        Executable.executable_candidate_count,
     );
 
-    const reference = Model.reference_executable_candidate;
+    const reference = Executable.reference_executable_candidate;
     try std.testing.expectEqual(.reference, reference.origin);
     try std.testing.expectEqual(.semantic, reference.schedule);
     try std.testing.expectEqual(@as(usize, 1), reference.executable.node_ct);
@@ -32,14 +32,14 @@ test "executable search combines analysis alternatives and schedule variants" {
         .view => return error.TestUnexpectedResult,
     }
 
-    try std.testing.expectEqual(.planned, Model.selected_executable_candidate.origin);
-    try std.testing.expectEqual(.memory_pressure, Model.selected_executable_candidate.schedule);
-    try std.testing.expect(Model.executable_candidate_frontier.count > 0);
-    try std.testing.expect(Model.executable_candidate_frontier.count <= 16);
+    try std.testing.expectEqual(.planned, Executable.selected_executable_candidate.origin);
+    try std.testing.expectEqual(.memory_pressure, Executable.selected_executable_candidate.schedule);
+    try std.testing.expect(Executable.executable_candidate_frontier.count > 0);
+    try std.testing.expect(Executable.executable_candidate_frontier.count <= 16);
     const fingerprint = zgc.compiler.analysis.fingerprint;
-    try std.testing.expectEqual(fingerprint.executable(Model.executable), Model.structural_fingerprint);
-    try std.testing.expect(fingerprint.executable(reference.executable) != Model.structural_fingerprint);
-    const cost = Model.selected_executable_candidate.cost;
+    try std.testing.expectEqual(fingerprint.executable(Executable.program), Executable.structural_fingerprint);
+    try std.testing.expect(fingerprint.executable(reference.executable) != Executable.structural_fingerprint);
+    const cost = Executable.selected_executable_candidate.cost;
     try std.testing.expect(cost.access_work > 0);
     try std.testing.expectEqual(
         cost.arithmetic_work + cost.access_work + cost.register_pressure_work + cost.transfer_work,
@@ -49,10 +49,10 @@ test "executable search combines analysis alternatives and schedule variants" {
 
 test "model selection honors optimization targets and a forced frontier index" {
     const definition = models.matmul_definition;
-    const Default = models.MatmulModel;
-    const Fast = definition.modelWithOptions(.{ .target = .fast });
-    const Memory = definition.modelWithOptions(.{ .target = .memory });
-    const Small = definition.modelWithOptions(.{ .target = .small });
+    const Default = models.MatmulExecutable;
+    const Fast = definition.executableWith(.{ .target = .fast });
+    const Memory = definition.executableWith(.{ .target = .memory });
+    const Small = definition.executableWith(.{ .target = .small });
     const frontier = Default.executable_candidate_frontier;
     try std.testing.expect(frontier.count > 1);
 
@@ -67,15 +67,15 @@ test "model selection honors optimization targets and a forced frontier index" {
     try std.testing.expectEqual(.balanced, Default.selection_options.target);
 
     const forced_index = frontier.count - 1;
-    const Forced = definition.modelWithOptions(.{ .target = .fast, .frontier_index = forced_index });
+    const Forced = definition.executableWith(.{ .target = .fast, .frontier_index = forced_index });
     try std.testing.expectEqual(forced_index, Forced.selected_executable_candidate_index);
     try std.testing.expect(std.meta.eql(
         frontier.candidates[forced_index].?.executable,
-        Forced.executable,
+        Forced.program,
     ));
 
-    var regular = Default.init();
-    var forced = Forced.init();
+    var regular = Default.Runtime.init();
+    var forced = Forced.Runtime.init();
     const input: [models.matmul_batch * 3]f32 = @splat(1);
     const weights = [_]f32{ 1, 2, 3, 4, 5, 6 };
     try regular.copyInput(.input, &input);
@@ -143,9 +143,9 @@ test "expression liveness distinguishes a chain from a wide reduction tree" {
 }
 
 test "contraction analysis choices lower to distinct specialized plans" {
-    const Model = models.MatmulModel;
-    const capacity = Model.internal_capacity;
-    const candidates = comptime zgc.compiler.analysis.ContractionAnalysis(capacity).analyze(Model.semantic_graph);
+    const Executable = models.MatmulExecutable;
+    const capacity = Executable.internal_capacity;
+    const candidates = comptime zgc.compiler.analysis.ContractionAnalysis(capacity).analyze(Executable.semantic_graph);
     try std.testing.expectEqual(@as(usize, 4), candidates.count);
 
     const Strategy = @TypeOf(candidates.values[0].?.strategy);
@@ -156,15 +156,15 @@ test "contraction analysis choices lower to distinct specialized plans" {
         break :blk strategies;
     };
     const baseline = comptime zgc.compiler.planning.Lowering(capacity).lower(
-        Model.semantic_graph,
-        Model.semantic_analysis_result.dependencies.topological_order,
+        Executable.semantic_graph,
+        Executable.semantic_analysis_result.dependencies.topological_order,
         .{},
         .{},
         baseline_strategies,
     );
     const scalar = comptime zgc.compiler.planning.Lowering(capacity).lower(
-        Model.semantic_graph,
-        Model.semantic_analysis_result.dependencies.topological_order,
+        Executable.semantic_graph,
+        Executable.semantic_analysis_result.dependencies.topological_order,
         .{},
         .{},
         scalar_strategies,
@@ -174,16 +174,16 @@ test "contraction analysis choices lower to distinct specialized plans" {
 }
 
 test "layout analysis offers propagated and unpacked contraction layouts" {
-    const Model = models.MatmulModel;
-    const capacity = Model.internal_capacity;
+    const Executable = models.MatmulExecutable;
+    const capacity = Executable.internal_capacity;
     const analysis = zgc.compiler.analysis.LayoutAnalysis(capacity);
-    const candidates = comptime analysis.analyze(Model.semantic_graph, Model.semantic_analysis_result);
+    const candidates = comptime analysis.analyze(Executable.semantic_graph, Executable.semantic_analysis_result);
     try std.testing.expectEqual(@as(usize, 3), candidates.count);
     try std.testing.expectEqual(.propagated, candidates.values[1].?.regime);
     try std.testing.expectEqual(.unpacked, candidates.values[2].?.regime);
 
-    const propagated = comptime analysis.applySelection(Model.semantic_graph, candidates.values[1].?.regions);
-    const unpacked = comptime analysis.applySelection(Model.semantic_graph, candidates.values[2].?.regions);
+    const propagated = comptime analysis.applySelection(Executable.semantic_graph, candidates.values[1].?.regions);
+    const unpacked = comptime analysis.applySelection(Executable.semantic_graph, candidates.values[2].?.regions);
     try std.testing.expect(!std.meta.eql(propagated.tensors[1].?.layout, unpacked.tensors[1].?.layout));
     try std.testing.expect(std.meta.eql(propagated.tensors[2].?.layout, unpacked.tensors[2].?.layout));
 }
@@ -218,8 +218,8 @@ test "structured costs support Pareto dominance" {
 }
 
 test "scratch cost accounts for reusable intermediate storage" {
-    const cost = models.ReuseModel.selected_executable_candidate.cost;
-    try std.testing.expectEqual(models.ReuseModel.memory_plan.byte_count, cost.peak_memory_bytes);
+    const cost = models.ReuseExecutable.selected_executable_candidate.cost;
+    try std.testing.expectEqual(models.ReuseExecutable.memory_plan.byte_count, cost.peak_memory_bytes);
     try std.testing.expect(cost.scratch_memory_bytes > 0);
     try std.testing.expectEqual(
         cost.peak_memory_bytes,

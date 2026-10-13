@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) !void {
     const raylib_artifact = raylib_dep.artifact("raylib");
 
     const inspect_cli_mod = zgc_dep.module("zgc_inspect_cli");
-    inspect_cli_mod.addImport("model", classifier_model_mod);
+    inspect_cli_mod.addImport("executable", classifier_model_mod);
     const model_inspector = b.addExecutable(.{
         .name = "zgc-inspect",
         .root_module = inspect_cli_mod,
@@ -66,41 +66,41 @@ pub fn build(b: *std.Build) !void {
     const demo_cmd = b.addRunArtifact(demo_exe);
     demo_step.dependOn(&demo_cmd.step);
 
-    const model_runner_mod = zgc_dep.module("zgc_model_runner");
-    model_runner_mod.addImport("model", classifier_model_mod);
-    const model_exe = b.addExecutable(.{
-        .name = "zgc-model",
-        .root_module = model_runner_mod,
+    const executable_runner_mod = zgc_dep.module("zgc_executable_runner");
+    executable_runner_mod.addImport("executable", classifier_model_mod);
+    const executable_binary = b.addExecutable(.{
+        .name = "zgc-executable",
+        .root_module = executable_runner_mod,
     });
-    model_exe.forceUndefinedSymbol(if (target.result.os.tag == .macos)
-        "_zgc_model_run"
+    executable_binary.forceUndefinedSymbol(if (target.result.os.tag == .macos)
+        "_zgc_runtime_run"
     else
-        "zgc_model_run");
+        "zgc_runtime_run");
 
-    const install_model = b.addInstallArtifact(model_exe, .{});
-    const build_model_step = b.step("build-model", "Build the lean generated-model binary");
-    build_model_step.dependOn(&install_model.step);
+    const install_executable = b.addInstallArtifact(executable_binary, .{});
+    const build_executable_step = b.step("build-executable", "Build the lean generated executable");
+    build_executable_step.dependOn(&install_executable.step);
 
-    const model_abi_mod = zgc_dep.module("zgc_model_abi");
-    model_abi_mod.addImport("model", classifier_model_mod);
-    const model_library = b.addLibrary(.{
-        .name = "zgc-model",
+    const executable_abi_mod = zgc_dep.module("zgc_executable_abi");
+    executable_abi_mod.addImport("executable", classifier_model_mod);
+    const executable_library = b.addLibrary(.{
+        .name = "zgc-executable",
         .linkage = .dynamic,
-        .root_module = model_abi_mod,
+        .root_module = executable_abi_mod,
     });
-    model_library.forceUndefinedSymbol(if (target.result.os.tag == .macos)
-        "_zgc_model_run"
+    executable_library.forceUndefinedSymbol(if (target.result.os.tag == .macos)
+        "_zgc_runtime_run"
     else
-        "zgc_model_run");
-    const install_model_library = b.addInstallArtifact(model_library, .{});
-    const build_model_library_step = b.step("build-model-library", "Build the generated-model C ABI library");
-    build_model_library_step.dependOn(&install_model_library.step);
+        "zgc_runtime_run");
+    const install_executable_library = b.addInstallArtifact(executable_library, .{});
+    const build_executable_library_step = b.step("build-executable-library", "Build the generated executable C ABI library");
+    build_executable_library_step.dependOn(&install_executable_library.step);
 
     const disassembler = if (target.result.os.tag == .macos)
-        b.addSystemCommand(&.{ "xcrun", "llvm-objdump", "--disassemble-symbols=_zgc_model_run" })
+        b.addSystemCommand(&.{ "xcrun", "llvm-objdump", "--disassemble-symbols=_zgc_runtime_run" })
     else
-        b.addSystemCommand(&.{ "objdump", "--disassemble=zgc_model_run" });
-    disassembler.addArtifactArg(model_exe);
-    const disassemble_model_step = b.step("disassemble-model", "Disassemble the generated model execution symbol");
-    disassemble_model_step.dependOn(&disassembler.step);
+        b.addSystemCommand(&.{ "objdump", "--disassemble=zgc_runtime_run" });
+    disassembler.addArtifactArg(executable_binary);
+    const disassemble_executable_step = b.step("disassemble-executable", "Disassemble the generated runtime execution symbol");
+    disassemble_executable_step.dependOn(&disassembler.step);
 }

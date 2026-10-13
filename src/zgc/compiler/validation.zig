@@ -84,7 +84,7 @@ pub fn Validation(comptime capacity: Graph.Capacity) type {
     };
 }
 
-/// Validates optimizer output before lifetime analysis and model generation.
+/// Validates optimizer output before lifetime analysis and executable generation.
 /// Failures here indicate an invalid compiler rewrite or execution plan.
 pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
     return struct {

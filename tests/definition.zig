@@ -33,12 +33,12 @@ const matmul_model = model: {
     const lhs = builder_sources.parameter(.lhs, .f32, &.{ 3, 4 });
     const rhs = builder_sources.parameter(.rhs, .f32, &.{ 4, 7 });
     builder.output(builder.relu(builder.matmul(lhs, rhs)));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "definition counting and lowering preserve exact graph contracts" {
     const counts = matmul_model.internal_capacity;
-    const graph = matmul_model.executable;
+    const graph = matmul_model.program;
 
     try std.testing.expectEqual(@as(usize, 2), counts.max_nodes);
     try std.testing.expectEqual(@as(usize, 4), counts.max_tensors);
@@ -75,11 +75,11 @@ const batch_model = model: {
     const weights = builder_sources.parameter(.rhs, .f32, &.{ 4, 3 });
     const bias = builder_sources.parameter(.auxiliary, .f32, &.{3});
     builder.output(builder.relu(builder.add(builder.matmul(input, weights), bias)));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "lowering fixes batch-oriented layouts and matmul strategy" {
-    const graph = batch_model.executable;
+    const graph = batch_model.program;
     const batch = std.simd.suggestVectorLength(f32) orelse 4;
     const expected = [2]isize{ 1, batch };
 
@@ -97,7 +97,7 @@ const fusion_candidate_model = model: {
     const b = builder_sources.input(.rhs, .f32, &.{4});
     const c = builder_sources.input(.auxiliary, .f32, &.{4});
     builder.output(builder.add(builder.mul(a, b), c));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "semantic analysis records tensor uses and outputs" {
@@ -118,7 +118,7 @@ const reduction_model = model: {
     const biased = builder.add(input, bias);
     builder.output(builder.mean(biased, .{ .axes = &.{ -3, -2 }, .keep_dims = true }));
     builder.output(builder.max(input, zgc.ReductionOptions{}));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "broadcasting and reductions normalize compile-time geometry" {
@@ -142,11 +142,11 @@ const structural_model = model: {
     const reshaped = builder.reshape(expanded, &.{ 4, 6 });
     const permuted = builder.permute(reshaped, &.{ 1, 0 });
     builder.output(builder.slice(permuted, .{ .axis = 0, .start = 1, .end = 6, .step = 2 }));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "structural operations lower to one static alias chain" {
-    const graph = structural_model.executable;
+    const graph = structural_model.program;
     const output = graph.tensors[6].?;
 
     try std.testing.expectEqualSlices(usize, &.{ 3, 4 }, output.shape.slice());
@@ -188,11 +188,11 @@ const predicate_model = model: {
     const fallback = builder.full(.f32, &.{ 1, 3 }, -1);
     builder.output(condition);
     builder.output(builder.where(condition, input, fallback));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "comparisons and selection carry explicit boolean dtype through lowering" {
-    const graph = predicate_model.executable;
+    const graph = predicate_model.program;
     const condition = graph.tensors[2].?;
     const selected = graph.tensors[5].?;
 
@@ -202,7 +202,7 @@ test "comparisons and selection carry explicit boolean dtype through lowering" {
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, selected.shape.slice());
     try std.testing.expectEqual(@as(bool, true), zgc.memory.ScalarValue.init(.bool, true).get(.bool));
 
-    var model = predicate_model.init();
+    var model = predicate_model.Runtime.init();
     try model.copyInput(.lhs, &[_]f32{ -2, 0, 3, -4, 5, 6 });
     model.run();
     try std.testing.expectEqualSlices(bool, &.{ false, false, true, false, true, true }, model.outputView(0).storage);

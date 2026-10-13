@@ -24,14 +24,14 @@ const definition = blk: {
     break :blk builder.finish();
 };
 
-const Model = @import("benchmark_selection").model(definition, &.{.{
+const Executable = @import("benchmark_selection").executable(definition, &.{.{
     .source = .input,
     .binding = zgc.memory.Source.bound,
 }});
 
 pub const ZgcBenchmark = struct {
     const Self = @This();
-    pub const CompiledModel = Model;
+    pub const CompiledExecutable = Executable;
 
     pub const name = "graph/dense/128-64-10/batch32";
     pub const default_iterations = 100;
@@ -45,12 +45,12 @@ pub const ZgcBenchmark = struct {
     pub const parameter_count = parameter_total;
     pub const batch = batch_size;
 
-    model: Model,
+    runtime: Executable.Runtime,
     input: [batch_size * input_width]f32,
 
     pub fn init() Self {
-        var result: Self = .{ .model = Model.init(), .input = undefined };
-        const layout = Model.sourceLayout(.input);
+        var result: Self = .{ .runtime = Executable.Runtime.init(), .input = undefined };
+        const layout = Executable.Runtime.sourceLayout(.input);
         for (0..batch_size) |row| {
             for (0..input_width) |column| {
                 const offset: usize = @intCast(row * @as(usize, @intCast(layout.strides[0])) +
@@ -67,20 +67,20 @@ pub const ZgcBenchmark = struct {
         for (&b1, 0..) |*item, index| item.* = sample(index, 7);
         for (&w2, 0..) |*item, index| item.* = sample(index, 44);
         for (&b2, 0..) |*item, index| item.* = sample(index, 26);
-        result.model.copySource(.w1, &w1) catch unreachable;
-        result.model.copySource(.b1, &b1) catch unreachable;
-        result.model.copySource(.w2, &w2) catch unreachable;
-        result.model.copySource(.b2, &b2) catch unreachable;
+        result.runtime.copySource(.w1, &w1) catch unreachable;
+        result.runtime.copySource(.b1, &b1) catch unreachable;
+        result.runtime.copySource(.w2, &w2) catch unreachable;
+        result.runtime.copySource(.b2, &b2) catch unreachable;
         return result;
     }
 
     pub fn prepare(self: *Self) !void {
-        try self.model.bindInput(.input, &self.input);
+        try self.runtime.bindInput(.input, &self.input);
     }
 
     pub fn validate(self: *Self) !void {
-        self.model.run();
-        const output = self.model.outputView(0);
+        self.runtime.run();
+        const output = self.runtime.outputView(0);
         var probability_sum: f32 = 0;
         for (0..output_width) |column| {
             const probability = output.get(.{ 0, column });
@@ -92,8 +92,8 @@ pub const ZgcBenchmark = struct {
 
     pub fn run(self: *Self, iterations: usize) void {
         for (0..iterations) |_| {
-            self.model.run();
-            std.mem.doNotOptimizeAway(self.model.outputView(0).storage);
+            self.runtime.run();
+            std.mem.doNotOptimizeAway(self.runtime.outputView(0).storage);
         }
     }
 };

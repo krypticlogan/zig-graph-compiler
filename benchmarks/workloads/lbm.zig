@@ -155,7 +155,7 @@ const definition = blk: {
 
 const FluidStep = blk: {
     @setEvalBranchQuota(2_000_000);
-    break :blk @import("benchmark_selection").model(definition, &.{});
+    break :blk @import("benchmark_selection").executable(definition, &.{});
 };
 
 fn directLbmStep(
@@ -349,13 +349,13 @@ const fluid_weights = [9]f32{
 const cx_values = [9]f32{ 0, 1, 0, -1, 0, 1, -1, -1, 1 };
 const cy_values = [9]f32{ 0, 0, 1, 0, -1, 1, 1, -1, -1 };
 
-var zgc_model = FluidStep.init();
+var zgc_runtime = FluidStep.Runtime.init();
 var zgc_populations: [population_count]f32 = undefined;
 var direct_populations: [population_count]f32 = undefined;
 var direct_output: [population_count]f32 = undefined;
 
 pub const ZgcBenchmark = struct {
-    pub const CompiledModel = FluidStep;
+    pub const CompiledExecutable = FluidStep;
 
     pub const name = "graph/application/lbm-d2q9/180x320/zgc";
     pub const default_iterations = 1;
@@ -365,19 +365,19 @@ pub const ZgcBenchmark = struct {
     pub const bytes_per_invocation: f64 = 2 * @sizeOf(f32) * population_count;
 
     pub fn init() ZgcBenchmark {
-        zgc_model = FluidStep.init();
+        zgc_runtime = FluidStep.Runtime.init();
         initializePopulations(&zgc_populations);
-        zgc_model.copyInput(.f, &zgc_populations) catch unreachable;
-        zgc_model.copyInput(.omega, &.{1.0}) catch unreachable;
-        zgc_model.copySource(.cx, &cx_values) catch unreachable;
-        zgc_model.copySource(.cy, &cy_values) catch unreachable;
-        zgc_model.copySource(.weights, &fluid_weights) catch unreachable;
+        zgc_runtime.copyInput(.f, &zgc_populations) catch unreachable;
+        zgc_runtime.copyInput(.omega, &.{1.0}) catch unreachable;
+        zgc_runtime.copySource(.cx, &cx_values) catch unreachable;
+        zgc_runtime.copySource(.cy, &cy_values) catch unreachable;
+        zgc_runtime.copySource(.weights, &fluid_weights) catch unreachable;
         return .{};
     }
 
     pub fn validate(_: *ZgcBenchmark) !void {
-        zgc_model.run();
-        const rest_population = zgc_model.outputView(0).get(.{ H / 2, W / 2, 0 });
+        zgc_runtime.run();
+        const rest_population = zgc_runtime.outputView(0).get(.{ H / 2, W / 2, 0 });
         if (!std.math.isFinite(rest_population) or
             !std.math.approxEqAbs(f32, rest_population, fluid_weights[0], 1e-5))
         {
@@ -387,8 +387,8 @@ pub const ZgcBenchmark = struct {
 
     pub fn run(_: *ZgcBenchmark, iterations: usize) void {
         for (0..iterations) |_| {
-            zgc_model.run();
-            std.mem.doNotOptimizeAway(zgc_model.outputView(0).storage);
+            zgc_runtime.run();
+            std.mem.doNotOptimizeAway(zgc_runtime.outputView(0).storage);
         }
     }
 };

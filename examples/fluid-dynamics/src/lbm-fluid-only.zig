@@ -181,5 +181,5 @@ pub const definition = blk: {
 
 pub const FluidStep = blk: {
     @setEvalBranchQuota(2_000_000);
-    break :blk definition.model();
+    break :blk definition.executable();
 };

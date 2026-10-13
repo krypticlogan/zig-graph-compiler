@@ -14,7 +14,7 @@ pub fn main() void {
     defer rl.closeWindow();
     rl.setTargetFPS(120);
 
-    var model = life.Model.init();
+    var runtime = life.Executable.Runtime.init();
     var world: [life.cell_count]bool = @splat(false);
     seedWorld(&world);
 
@@ -34,7 +34,7 @@ pub fn main() void {
             generation = 0;
         }
         if (rl.isKeyPressed(.n)) {
-            life.step(&model, &world);
+            life.step(&runtime, &world);
             generation += 1;
             elapsed = 0;
         }
@@ -44,7 +44,7 @@ pub fn main() void {
         if (running) {
             elapsed += rl.getFrameTime();
             while (elapsed >= step_seconds) : (elapsed -= step_seconds) {
-                life.step(&model, &world);
+                life.step(&runtime, &world);
                 generation += 1;
             }
         } else {

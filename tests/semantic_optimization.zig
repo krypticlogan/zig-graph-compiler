@@ -4,7 +4,7 @@ const zgc = @import("zgc");
 const Sources = enum(usize) { input, tail, fill, dead };
 const Definition = zgc.DefinitionBuilder;
 
-const OptimizationModel = model: {
+const OptimizationExecutable = model: {
     var builder = Definition.init();
     const builder_sources = builder.sources(Sources);
     const input = builder_sources.input(.input, .f32, &.{10});
@@ -29,15 +29,15 @@ const OptimizationModel = model: {
     builder.output(folded);
     builder.output(composed_slice);
     builder.output(flattened_concat);
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "semantic optimization compacts and canonicalizes the live graph" {
-    const graph = OptimizationModel.semantic_graph;
+    const graph = OptimizationExecutable.semantic_graph;
 
-    try std.testing.expect(OptimizationModel.raw_graph.node_ct > graph.node_ct);
-    try std.testing.expectEqual(@as(?usize, null), OptimizationModel.semantic_provenance.raw_to_optimized_tensor[3]);
-    try std.testing.expectEqual(@as(?usize, null), OptimizationModel.semantic_provenance.raw_to_optimized_tensor[4]);
+    try std.testing.expect(OptimizationExecutable.raw_graph.node_ct > graph.node_ct);
+    try std.testing.expectEqual(@as(?usize, null), OptimizationExecutable.semantic_provenance.raw_to_optimized_tensor[3]);
+    try std.testing.expectEqual(@as(?usize, null), OptimizationExecutable.semantic_provenance.raw_to_optimized_tensor[4]);
     try std.testing.expectEqual(@as(usize, 5), graph.node_ct);
 
     const folded = graph.tensors[graph.outputs[1].?].?.origin.literal;
@@ -52,9 +52,9 @@ test "semantic optimization compacts and canonicalizes the live graph" {
 }
 
 test "planner composes structural remaps and preserves optimized graph semantics" {
-    try std.testing.expectEqual(.composed, OptimizationModel.selected_executable_candidate.remap_regime.?);
+    try std.testing.expectEqual(.composed, OptimizationExecutable.selected_executable_candidate.remap_regime.?);
     var found_remap = false;
-    for (OptimizationModel.executable.nodes[0..OptimizationModel.executable.node_ct]) |maybe_node| {
+    for (OptimizationExecutable.program.nodes[0..OptimizationExecutable.program.node_ct]) |maybe_node| {
         const node = maybe_node.?;
         found_remap = found_remap or switch (node.op) {
             .compute => |compute| switch (compute) {
@@ -66,7 +66,7 @@ test "planner composes structural remaps and preserves optimized graph semantics
     }
     try std.testing.expect(found_remap);
 
-    var model = OptimizationModel.init();
+    var model = OptimizationExecutable.Runtime.init();
     try model.copyInput(.input, &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
     try model.copyInput(.tail, &.{9});
     try model.copyInput(.fill, &.{-1});

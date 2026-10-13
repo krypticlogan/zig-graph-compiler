@@ -28,11 +28,11 @@ const life_step = model: {
     const has_three_neighbors = builder.equal(neighbor_count, three);
     const survives = builder.logicalAnd(world, has_two_neighbors);
     builder.output(builder.logicalOr(has_three_neighbors, survives));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "padding and one overlapping window view express a Conway step" {
-    const graph = life_step.executable;
+    const graph = life_step.program;
     const padded = graph.tensors[2].?;
     const neighborhoods = graph.tensors[3].?;
 
@@ -41,7 +41,7 @@ test "padding and one overlapping window view express a Conway step" {
     try std.testing.expectEqual([4]isize{ 5, 1, 5, 1 }, neighborhoods.layout.strides[0..4].*);
     try std.testing.expectEqual(padded.storage_tensor, neighborhoods.storage_tensor);
 
-    var model = life_step.init();
+    var model = life_step.Runtime.init();
     try model.copyInput(.world, &.{
         false, true, false,
         false, true, false,
@@ -68,15 +68,15 @@ const dilated_windows = model: {
         .dilations = &.{2},
     });
     builder.output(builder.contiguous(windows));
-    break :model builder.finish().model();
+    break :model builder.finish().executable();
 };
 
 test "window strides and dilation produce static overlapping geometry" {
-    const window = dilated_windows.executable.tensors[1].?;
+    const window = dilated_windows.program.tensors[1].?;
     try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, window.shape.slice());
     try std.testing.expectEqual([2]isize{ 2, 2 }, window.layout.strides[0..2].*);
 
-    var model = dilated_windows.init();
+    var model = dilated_windows.Runtime.init();
     try model.copyInput(.input, &.{ 0, 1, 2, 3, 4, 5, 6 });
     model.run();
     try std.testing.expectEqualSlices(i8, &.{ 0, 2, 4, 2, 4, 6 }, model.outputView(0).storage);

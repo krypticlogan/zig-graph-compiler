@@ -6,8 +6,8 @@ zig build inspect -- all \
 zig build disassemble-model -Doptimize=ReleaseFast \
   > inspect-out/disassembly.txt 2>&1
 
-nm -nm zig-out/bin/zgc-model \
+nm -nm zig-out/bin/zgc-executable \
   > inspect-out/symbols.txt
 
-otool -l zig-out/bin/zgc-model \
+otool -l zig-out/bin/zgc-executable \
   > inspect-out/load-commands.txt

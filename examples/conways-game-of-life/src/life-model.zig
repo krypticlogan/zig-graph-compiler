@@ -4,7 +4,7 @@ pub const width = 120;
 pub const height = 88;
 pub const cell_count = width * height;
 
-// The world is the model's only external source. Its fixed dimensions make the
+// The world is the runtime's only external source. Its fixed dimensions make the
 // entire neighborhood geometry available while the graph is being defined.
 const Sources = enum(usize) { world };
 const Definition = zgc.DefinitionBuilder;
@@ -20,7 +20,7 @@ fn lifeRule(
     return born.logicalOr(survives);
 }
 
-pub const Model = model: {
+pub const Executable = runtime: {
     var b = Definition.init();
     const b_sources = b.sources(Sources);
     const world = b.expr(b_sources.input(.world, .bool, &.{ height, width }));
@@ -52,16 +52,16 @@ pub const Model = model: {
     b.output(neighbor_count.apply(lifeRule, .{ world, two, three }).value);
 
     // The application owns the evolving world,
-    // so the source is bound for each step instead of becoming persistent model storage.
-    break :model b.finish().modelWith(&.{
+    // so the source is bound for each step instead of becoming persistent runtime storage.
+    break :runtime b.finish().executableWith(.{ .sources = &.{
         .{ .source = .world, .binding = zgc.memory.Source.bound },
-    });
+    } });
 };
 
-pub fn step(model: *Model, world: *[cell_count]bool) void {
+pub fn step(runtime: *Executable.Runtime, world: *[cell_count]bool) void {
     // State remains outside the graph: bind the current generation, execute,
     // then feed the produced generation back into the application-owned buffer.
-    model.bindInput(.world, world) catch unreachable;
-    model.run();
-    @memcpy(world, model.outputView(0).storage);
+    runtime.bindInput(.world, world) catch unreachable;
+    runtime.run();
+    @memcpy(world, runtime.outputView(0).storage);
 }

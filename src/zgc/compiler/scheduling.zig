@@ -2,7 +2,7 @@ const Graph = @import("../core/graph.zig");
 const Tensor = @import("../core/tensor.zig");
 const Semantic = @import("../operations/semantic.zig");
 const Execution = @import("../execution/execution.zig");
-const Executable = @import("../execution/program.zig").Executable;
+const ProgramFactory = @import("../execution/program.zig").Program;
 
 /// The policy used to choose a legal topological schedule.
 pub const Kind = enum {
@@ -170,7 +170,7 @@ pub fn Scheduling(comptime capacity: Graph.Capacity) type {
 /// physical tensor choices.
 pub fn ExecutableScheduling(comptime capacity: Graph.Capacity) type {
     return struct {
-        const Program = Executable(capacity, Execution.Op);
+        const Program = ProgramFactory(capacity, Execution.Op);
         const ScheduleType = Schedule(capacity);
 
         pub const variant_count = 3;
@@ -342,7 +342,7 @@ pub fn ExecutableScheduling(comptime capacity: Graph.Capacity) type {
 pub fn Reference(comptime capacity: Graph.Capacity) type {
     return struct {
         const SemanticGraph = Graph.Graph(capacity, Semantic.Op);
-        const Program = Executable(capacity, Execution.Op);
+        const Program = ProgramFactory(capacity, Execution.Op);
         const ScheduleType = Schedule(capacity);
 
         pub fn plan(comptime graph: SemanticGraph, comptime schedule: ScheduleType) Program {

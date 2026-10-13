@@ -2,7 +2,7 @@ const Graph = @import("../core/graph.zig");
 const Tensor = @import("../core/tensor.zig");
 /// A complete executable program. Its node sequence is the literal execution
 /// schedule, and one invocation may write several tensors.
-pub fn Executable(comptime capacity: Graph.Capacity, Operation: type) type {
+pub fn Program(comptime capacity: Graph.Capacity, Operation: type) type {
     return struct {
         const Self = @This();
         pub const max_rank = capacity.max_rank;

@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     const cli_module = zgc_dep.module("zgc_inspect_cli");
-    cli_module.addImport("model", fluid_model_mod);
+    cli_module.addImport("executable", fluid_model_mod);
     const inspector = b.addExecutable(.{
         .name = "zgc-inspect",
         .root_module = cli_module,

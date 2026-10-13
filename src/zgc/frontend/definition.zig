@@ -100,7 +100,7 @@ pub const TensorRecord = struct {
     source_kind: ?Tensor.Source.Kind = null,
 };
 
-/// Compile-time graph definition. Lowered to a `zgc.Execution.Program` with `model()` or `modelWith()`.
+/// Compile-time graph definition. Compile it with `executable()` or `executableWith()`.
 pub fn Definition(
     comptime SourceKey: type,
     comptime node_count: usize,
@@ -120,7 +120,7 @@ pub fn Definition(
             /// Storage policy applied to the selected source.
             binding: SourceStorage.Binding,
         };
-        pub const ModelOptions = struct {
+        pub const ExecutableOptions = struct {
             sources: []const SourceOverride = &.{},
             target: @import("../compiler/search.zig").OptimizationTarget = .balanced,
             /// An index in the retained executable frontier overrides target.
@@ -137,19 +137,14 @@ pub fn Definition(
         input_ref_count: usize = input_ref_count,
         output_count: usize = output_count,
 
-        /// Run capacity counting, graph lowering, memory planning, and model
-        /// generation for this completed definition.
-        pub fn model(comptime definition: Self) type {
-            return definition.modelWithOptions(.{});
-        }
-
-        pub fn modelWith(comptime definition: Self, comptime sources: []const SourceOverride) type {
-            return definition.modelWithOptions(.{ .sources = sources });
+        /// Compile this definition into an executable.
+        pub fn executable(comptime definition: Self) type {
+            return definition.executableWith(.{});
         }
 
         /// Compile with source overrides and executable selection preferences.
-        pub fn modelWithOptions(comptime definition: Self, comptime options: ModelOptions) type {
-            return @import("../compiler/root.zig").model(
+        pub fn executableWith(comptime definition: Self, comptime options: ExecutableOptions) type {
+            return @import("../compiler/root.zig").executable(
                 Self,
                 definition,
                 options.sources,

@@ -1,6 +1,6 @@
 const std = @import("std");
 const Execution = @import("../execution/execution.zig");
-const Executable = @import("../execution/program.zig").Executable;
+const ProgramFactory = @import("../execution/program.zig").Program;
 const Graph = @import("../core/graph.zig");
 const Source = @import("../storage/source.zig");
 const Storage = @import("../storage/storage.zig");
@@ -39,7 +39,7 @@ pub fn SearchResult(comptime capacity: Graph.Capacity) type {
 }
 
 /// Half-open execution interval for one tensor's backing storage.
-/// A null end marks storage that must remain reserved for the model lifetime.
+/// A null end marks storage that must remain reserved for the runtime lifetime.
 pub const Lifetime = struct {
     begin_node: usize,
     end_node_exclusive: ?usize,
@@ -202,7 +202,7 @@ pub const SelectionOptions = struct {
 
 pub fn PlanCandidate(comptime capacity: Graph.Capacity) type {
     return struct {
-        executable: Executable(capacity, Execution.Op),
+        executable: ProgramFactory(capacity, Execution.Op),
         origin: Origin,
         fusion_regime: ?Analysis.FusionRegime = null,
         layout_regime: ?Analysis.LayoutRegime = null,
@@ -326,7 +326,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
             return !lhs.preferredTo(rhs) and !rhs.preferredTo(lhs);
         }
 
-        fn sameExecutable(lhs: Executable(capacity, Execution.Op), rhs: Executable(capacity, Execution.Op)) bool {
+        fn sameExecutable(lhs: ProgramFactory(capacity, Execution.Op), rhs: ProgramFactory(capacity, Execution.Op)) bool {
             if (lhs.node_ct != rhs.node_ct or lhs.tensor_ct != rhs.tensor_ct or
                 lhs.input_ref_ct != rhs.input_ref_ct or lhs.output_ref_ct != rhs.output_ref_ct or
                 lhs.output_ct != rhs.output_ct) return false;
@@ -388,7 +388,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
 /// lifetime and storage planning for each.
 pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
     return struct {
-        const Program = Executable(capacity, Execution.Op);
+        const Program = ProgramFactory(capacity, Execution.Op);
         const SemanticFacts = Analysis.Facts(capacity);
         const FusionCandidates = Analysis.FusionCandidates(capacity.max_nodes);
         const LayoutCandidates = Analysis.LayoutCandidates(capacity);

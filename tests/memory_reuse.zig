@@ -3,11 +3,11 @@ const zgc = @import("zgc");
 const models = @import("fixtures/models.zig");
 
 test "memory plan reuses an expired intermediate region" {
-    const regions = models.ReuseModel.memory_plan.tensor_regions;
+    const regions = models.ReuseExecutable.memory_plan.tensor_regions;
 
     try std.testing.expectEqual(regions[1], regions[3]);
     try std.testing.expect(regions[1].?.offset != regions[2].?.offset);
-    try std.testing.expectEqual(@as(usize, 3 * 4 * @sizeOf(f32)), models.ReuseModel.memory_plan.byte_count);
+    try std.testing.expectEqual(@as(usize, 3 * 4 * @sizeOf(f32)), models.ReuseExecutable.memory_plan.byte_count);
 }
 
 test "persistent outputs retain distinct regions" {
@@ -21,13 +21,13 @@ test "persistent outputs retain distinct regions" {
         builder.output(builder.relu(input));
         break :blk builder.finish();
     };
-    const Model = definition.modelWith(&.{
+    const Executable = definition.executableWith(.{ .sources = &.{
         .{ .source = .input, .binding = zgc.memory.Source.bound },
-    });
-    const regions = Model.memory_plan.tensor_regions;
+    } });
+    const regions = Executable.memory_plan.tensor_regions;
 
     try std.testing.expect(regions[1].?.offset != regions[2].?.offset);
-    try std.testing.expectEqual(@as(usize, 2 * 4 * @sizeOf(f32)), Model.memory_plan.byte_count);
+    try std.testing.expectEqual(@as(usize, 2 * 4 * @sizeOf(f32)), Executable.memory_plan.byte_count);
 }
 
 test "memory plan splits and coalesces free spans" {
@@ -43,16 +43,16 @@ test "memory plan splits and coalesces free spans" {
         builder.output(builder.relu(input));
         break :blk builder.finish();
     };
-    const Model = definition.modelWith(&.{
+    const Executable = definition.executableWith(.{ .sources = &.{
         .{ .source = .input, .binding = zgc.memory.Source.bound },
-    });
-    const regions = Model.memory_plan.tensor_regions;
+    } });
+    const regions = Executable.memory_plan.tensor_regions;
 
     try std.testing.expectEqual(@as(usize, 0), regions[1].?.offset);
     try std.testing.expectEqual(@as(usize, 32), regions[2].?.offset);
     try std.testing.expectEqual(@as(usize, 0), regions[3].?.offset);
     try std.testing.expectEqual(@as(usize, 4), regions[4].?.offset);
-    try std.testing.expectEqual(@as(usize, 36), Model.memory_plan.byte_count);
+    try std.testing.expectEqual(@as(usize, 36), Executable.memory_plan.byte_count);
 }
 
 test "memory plan grows when no free span fits" {
@@ -69,15 +69,15 @@ test "memory plan grows when no free span fits" {
         builder.output(builder.relu(large_input));
         break :blk builder.finish();
     };
-    const Model = definition.modelWith(&.{
+    const Executable = definition.executableWith(.{ .sources = &.{
         .{ .source = .small_input, .binding = zgc.memory.Source.bound },
         .{ .source = .large_input, .binding = zgc.memory.Source.bound },
-    });
-    const regions = Model.memory_plan.tensor_regions;
+    } });
+    const regions = Executable.memory_plan.tensor_regions;
 
     try std.testing.expectEqual(@as(usize, 0), regions[4].?.offset);
     try std.testing.expectEqual(@as(usize, 36), regions[5].?.offset);
-    try std.testing.expectEqual(@as(usize, 76), Model.memory_plan.byte_count);
+    try std.testing.expectEqual(@as(usize, 76), Executable.memory_plan.byte_count);
 }
 
 test "owned sources are reserved before reusable computed storage" {
@@ -94,10 +94,10 @@ test "owned sources are reserved before reusable computed storage" {
         builder.output(builder.add(narrow_temporary, late_bias));
         break :blk builder.finish();
     };
-    const Model = definition.modelWith(&.{
+    const Executable = definition.executableWith(.{ .sources = &.{
         .{ .source = .input, .binding = zgc.memory.Source.bound },
-    });
-    const regions = Model.memory_plan.tensor_regions;
+    } });
+    const regions = Executable.memory_plan.tensor_regions;
     const bias_region = regions[4].?;
 
     for (regions, 0..) |maybe_region, tensor_id| {
@@ -109,7 +109,7 @@ test "owned sources are reserved before reusable computed storage" {
         );
     }
 
-    var model = Model.init();
+    var model = Executable.Runtime.init();
     try model.bindInput(.input, &.{ 1, 2, 3, 4, 5, 6, 7, 8 });
     try model.copySource(.bias, &.{10});
     model.run();
