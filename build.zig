@@ -112,7 +112,15 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&runner_test_exe.step);
 
-    const bindings_smoke = b.addSystemCommand(&.{ "python3", "bindings/tests/smoke.py" });
+    const python = b.option(
+        []const u8,
+        "python",
+        "Python interpreter for bindings tests",
+    ) orelse "python3";
+    
+    const bindings_smoke = b.addSystemCommand(
+        &.{ python, "bindings/tests/smoke.py" },
+    );
     bindings_smoke.addArtifactArg(cli);
     const bindings_test_step = b.step("test-bindings", "Compile and exercise the C ABI and Python runtime");
     bindings_test_step.dependOn(&bindings_smoke.step);
