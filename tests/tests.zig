@@ -13,4 +13,5 @@ test {
     _ = @import("validation.zig");
     _ = @import("artifact_abi.zig");
     _ = @import("serialized_frontend.zig");
+    _ = @import("numerical_validation.zig");
 }
