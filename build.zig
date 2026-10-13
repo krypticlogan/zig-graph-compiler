@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
     });
-    b.installFile("bindings/c/include/zgc_executable.h", "include/zgc_executable.h");
+    b.installFile("bindings/c/zgc_executable.h", "include/zgc_executable.h");
 
     // tests
     const test_embed_params = b.createModule(.{
@@ -111,6 +111,11 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&runner_test_exe.step);
+
+    const bindings_smoke = b.addSystemCommand(&.{ "python3", "bindings/tests/smoke.py" });
+    bindings_smoke.addArtifactArg(cli);
+    const bindings_test_step = b.step("test-bindings", "Compile and exercise the C ABI and Python runtime");
+    bindings_test_step.dependOn(&bindings_smoke.step);
 
     // benchmarks
     const benchmark_name = b.option([]const u8, "benchmark", "Specialized graph benchmark to run") orelse "dense";

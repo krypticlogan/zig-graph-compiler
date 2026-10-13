@@ -37,6 +37,7 @@ pub fn main(init: std.process.Init) !void {
             try stderr.flush();
             std.process.exit(1);
         };
+        return;
     }
     try stderr.print("unknown command: {s}\n\n", .{args[1]});
     try usage(stderr);

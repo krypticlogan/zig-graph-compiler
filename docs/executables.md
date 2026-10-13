@@ -5,7 +5,7 @@ ABI exposes the executable's metadata and lets a host allocate, initialize,
 and run an opaque runtime instance.
 
 The installed C declaration is
-[`bindings/c/include/zgc_executable.h`](../bindings/c/include/zgc_executable.h).
+[`bindings/c/zgc_executable.h`](../bindings/c/zgc_executable.h).
 `zgc_abi_version()` returns `ZGC_ABI_VERSION` so a host can reject an
 incompatible artifact before creating a runtime.
 
