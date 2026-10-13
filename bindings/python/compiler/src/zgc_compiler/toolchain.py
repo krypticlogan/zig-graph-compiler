@@ -113,7 +113,7 @@ def resolve_zig(
 
     raise ToolchainError(
         "no compatible Zig compiler was found; configure CompilerConfig(zig=...), "
-        "set ZGC_ZIG, add Zig to PATH, or run: zgc toolchain install"
+        "set ZGC_ZIG, add Zig to PATH, or run: zgc-compiler toolchain install"
     )
 
 

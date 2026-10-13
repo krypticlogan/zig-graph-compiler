@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
     });
     const cli_options = b.addOptions();
     cli_options.addOption([]const u8, "source_root", b.root.joinString(b.allocator, ".") catch @panic("OOM"));
+    cli_options.addOption(u32, "abi_version", @import("src/artifact/abi.zig").version);
     const cli = b.addExecutable(.{
         .name = "zgc",
         .root_module = b.createModule(.{
@@ -27,25 +28,31 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
     });
-    _ = b.addModule("zgc_model_runner", .{
-        .root_source_file = b.path("src/artifact/model_runner.zig"),
+    _ = b.addModule("zgc_executable_runner", .{
+        .root_source_file = b.path("src/artifact/executable_runner.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
     });
-    _ = b.addModule("zgc_model_abi", .{
-        .root_source_file = b.path("src/artifact/model_abi.zig"),
+    _ = b.addModule("zgc_executable_abi", .{
+        .root_source_file = b.path("src/artifact/executable_abi.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
     });
-    _ = b.addModule("zgc_zgir_model", .{
-        .root_source_file = b.path("src/artifact/zgir_model.zig"),
+    _ = b.addModule("zgc_inspectable_executable_abi", .{
+        .root_source_file = b.path("src/artifact/inspectable_executable_abi.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
     });
-    b.installFile("bindings/c/include/zgc_model.h", "include/zgc_model.h");
+    _ = b.addModule("zgc_zgir_executable", .{
+        .root_source_file = b.path("src/artifact/zgir_executable.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
+    });
+    b.installFile("bindings/c/include/zgc_executable.h", "include/zgc_executable.h");
 
     // tests
     const test_embed_params = b.createModule(.{
@@ -72,29 +79,29 @@ pub fn build(b: *std.Build) void {
         .root_module = test_mod,
     });
 
-    const runner_test_model = b.createModule(.{
+    const runner_test_executable = b.createModule(.{
         .root_source_file = b.path("tests/fixtures/runner_model.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
     });
     const runner_test_module = b.createModule(.{
-        .root_source_file = b.path("src/artifact/model_runner.zig"),
+        .root_source_file = b.path("src/artifact/executable_runner.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "model", .module = runner_test_model },
+            .{ .name = "executable", .module = runner_test_executable },
             .{ .name = "zgc", .module = zgc_mod },
         },
     });
     const runner_test_exe = b.addExecutable(.{
-        .name = "zgc-model-runner-test",
+        .name = "zgc-executable-runner-test",
         .root_module = runner_test_module,
     });
     runner_test_exe.forceUndefinedSymbol(if (target.result.os.tag == .macos)
-        "_zgc_model_run"
+        "_zgc_runtime_run"
     else
-        "zgc_model_run");
+        "zgc_runtime_run");
 
     const check_step = b.step("check", "Compile tests without running them");
     check_step.dependOn(&tests.step);

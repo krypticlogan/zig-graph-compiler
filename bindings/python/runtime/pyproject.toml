@@ -4,12 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zgc-runtime"
-version = "0.2.0"
-description = "Python bindings for ZGC model artifacts"
+version = "0.1.0"
+description = "Python runtime for ZGC executable artifacts"
 requires-python = ">=3.10"
-
-[project.scripts]
-zgc = "zgc.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

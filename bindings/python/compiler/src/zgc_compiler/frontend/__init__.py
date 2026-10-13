@@ -1,7 +1,6 @@
-from zgc import SourceBinding
+from zgc import SourceBinding, dtype
 
 from .graph import OPERATION_NAMES, FrozenGraph, Graph, Node, Value
-from .parser import parse_graph, parse_graph_file
 from .serialization import GRAPH_FORMAT_VERSION
 from .types import (
     Binding,
@@ -11,7 +10,6 @@ from .types import (
     bool_,
     bound,
     constant,
-    dtype,
     edge,
     f16,
     f32,
@@ -42,8 +40,6 @@ __all__ = [
     "f32",
     "i8",
     "owned",
-    "parse_graph",
-    "parse_graph_file",
     "reflect",
     "wrap",
 ]

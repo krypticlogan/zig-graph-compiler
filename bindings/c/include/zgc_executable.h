@@ -1,5 +1,5 @@
-#ifndef ZGC_MODEL_H
-#define ZGC_MODEL_H
+#ifndef ZGC_EXECUTABLE_H
+#define ZGC_EXECUTABLE_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -13,7 +13,7 @@ extern "C" {
 typedef enum zgc_status {
     ZGC_STATUS_OK = 0,
     ZGC_STATUS_INVALID_ARGUMENT = 1,
-    ZGC_STATUS_INVALID_MODEL_STORAGE = 2,
+    ZGC_STATUS_INVALID_RUNTIME_STORAGE = 2,
     ZGC_STATUS_INVALID_SOURCE = 3,
     ZGC_STATUS_INVALID_OUTPUT = 4,
     ZGC_STATUS_SIZE_MISMATCH = 5,
@@ -21,7 +21,19 @@ typedef enum zgc_status {
     ZGC_STATUS_INCOMPATIBLE_BINDING = 7,
     ZGC_STATUS_MISSING_BINDING = 8,
     ZGC_STATUS_BUFFER_TOO_SMALL = 9,
+    ZGC_STATUS_OUT_OF_MEMORY = 10,
 } zgc_status;
+
+typedef enum zgc_inspect_section {
+    ZGC_INSPECT_ALL = 0,
+    ZGC_INSPECT_SUMMARY = 1,
+    ZGC_INSPECT_RAW_GRAPH = 2,
+    ZGC_INSPECT_SEMANTIC_GRAPH = 3,
+    ZGC_INSPECT_EXECUTABLE = 4,
+    ZGC_INSPECT_REPRESENTATIONS = 5,
+    ZGC_INSPECT_TREE = 6,
+    ZGC_INSPECT_MEMORY_PLAN = 7,
+} zgc_inspect_section;
 
 typedef enum zgc_dtype {
     ZGC_DTYPE_F32 = 1,
@@ -68,38 +80,48 @@ typedef struct zgc_tensor_view {
 } zgc_tensor_view;
 
 uint32_t zgc_abi_version(void);
-size_t zgc_model_size(void);
-size_t zgc_model_alignment(void);
-size_t zgc_model_mutable_bytes(void);
+/* Fingerprint of the compiled executable graph, including its selected plan. */
+uint64_t zgc_executable_structural_fingerprint(void);
+size_t zgc_runtime_size(void);
+size_t zgc_runtime_alignment(void);
+size_t zgc_runtime_mutable_bytes(void);
+/* Exported only by inspectable artifacts. Query required bytes with
+   destination=NULL and capacity=0, then copy. */
+zgc_status zgc_executable_inspect(
+    zgc_inspect_section section,
+    char *destination,
+    size_t capacity,
+    size_t *required
+);
 
-zgc_status zgc_model_init(void *storage, size_t storage_size);
-void zgc_model_deinit(void *storage);
-zgc_status zgc_model_run(void *storage);
+zgc_status zgc_runtime_init(void *storage, size_t storage_size);
+void zgc_runtime_deinit(void *storage);
+zgc_status zgc_runtime_run(void *storage);
 
-size_t zgc_source_count(void);
-zgc_status zgc_get_source_descriptor(size_t source_index, zgc_source_descriptor *out);
-zgc_status zgc_model_copy_source(
-    void *model,
+size_t zgc_executable_source_count(void);
+zgc_status zgc_executable_get_source_descriptor(size_t source_index, zgc_source_descriptor *out);
+zgc_status zgc_runtime_copy_source(
+    void *runtime,
     uint32_t source_key,
     const void *data,
     size_t byte_count
 );
-zgc_status zgc_model_bind_source(
-    void *model,
+zgc_status zgc_runtime_bind_source(
+    void *runtime,
     uint32_t source_key,
     const void *data,
     size_t byte_count
 );
 
-size_t zgc_output_count(void);
-zgc_status zgc_get_output_descriptor(size_t output_index, zgc_tensor_descriptor *out);
-zgc_status zgc_model_output_view(
-    const void *model,
+size_t zgc_executable_output_count(void);
+zgc_status zgc_executable_get_output_descriptor(size_t output_index, zgc_tensor_descriptor *out);
+zgc_status zgc_runtime_output_view(
+    const void *runtime,
     size_t output_index,
     zgc_tensor_view *out
 );
-zgc_status zgc_model_copy_output(
-    const void *model,
+zgc_status zgc_runtime_copy_output(
+    const void *runtime,
     size_t output_index,
     void *destination,
     size_t destination_size

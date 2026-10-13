@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
@@ -39,14 +40,28 @@ class GraphRepresentation(Protocol):
     def outputs(self) -> tuple[ValueReference, ...]: ...
 
 
-def serialize_graph(graph: GraphRepresentation) -> str:
-    lines = [f"zgir {GRAPH_FORMAT_VERSION}", ""]
+def _graph_lines(graph: GraphRepresentation) -> Iterator[str]:
+    yield f"zgir {GRAPH_FORMAT_VERSION}"
+    yield ""
     for node in graph.nodes:
         arguments = [_literal(value) for value in node.inputs]
         arguments.extend(f"{name}={_literal(value)}" for name, value in node.attributes)
-        lines.append(f"%{node.id} = {node.operation}({', '.join(arguments)})")
-    lines.extend(("", f"outputs = [{', '.join(_literal(value) for value in graph.outputs)}]"))
-    return "\n".join(lines) + "\n"
+        yield f"%{node.id} = {node.operation}({', '.join(arguments)})"
+    yield ""
+    yield f"outputs = [{', '.join(_literal(value) for value in graph.outputs)}]"
+
+
+def serialize_graph(graph: GraphRepresentation) -> str:
+    return "\n".join(_graph_lines(graph)) + "\n"
+
+
+def fingerprint_graph(graph: GraphRepresentation) -> str:
+    """Hash the canonical graph without constructing its serialized text."""
+    digest = hashlib.sha256()
+    for line in _graph_lines(graph):
+        digest.update(line.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def _literal(value: object) -> str:

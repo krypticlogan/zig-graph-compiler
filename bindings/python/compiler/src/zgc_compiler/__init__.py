@@ -1,20 +1,19 @@
 from .artifact import CompiledArtifact
 from .compiler import Compiler
-from .config import CompilerConfig, SUPPORTED_ABI_VERSION, SUPPORTED_ZIG_VERSION
+from .config import SUPPORTED_ABI_VERSION, SUPPORTED_ZIG_VERSION, CompilerConfig
 from .errors import (
     CompilationError,
     CompilerError,
-    GraphParseError,
     ToolchainError,
 )
 from .frontend import (
+    GRAPH_FORMAT_VERSION,
+    OPERATION_NAMES,
     Binding,
     Boundary,
     FrozenGraph,
-    GRAPH_FORMAT_VERSION,
     Graph,
     Node,
-    OPERATION_NAMES,
     Redirect,
     SliceIteration,
     SourceBinding,
@@ -28,8 +27,6 @@ from .frontend import (
     f32,
     i8,
     owned,
-    parse_graph,
-    parse_graph_file,
     reflect,
     wrap,
 )
@@ -47,7 +44,6 @@ __all__ = [
     "FrozenGraph",
     "GRAPH_FORMAT_VERSION",
     "Graph",
-    "GraphParseError",
     "Node",
     "OPERATION_NAMES",
     "Redirect",
@@ -67,8 +63,6 @@ __all__ = [
     "i8",
     "install_zig",
     "owned",
-    "parse_graph",
-    "parse_graph_file",
     "reflect",
     "resolve_zig",
     "verify_zig",

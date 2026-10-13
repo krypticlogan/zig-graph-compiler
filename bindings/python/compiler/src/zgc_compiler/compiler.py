@@ -1,57 +1,34 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
-import platform
 import re
 import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Protocol
 
 from .artifact import CompiledArtifact
-from .cache import CompilerCache
-from .config import CompilerConfig, SUPPORTED_ABI_VERSION
+from .config import SUPPORTED_ABI_VERSION, CompilerConfig
 from .errors import CompilationError, CompilerError
-from .frontend import FrozenGraph, Graph, parse_graph
+from .frontend import FrozenGraph, Graph
 from .toolchain import ZigToolchain, resolve_zig
-
-_COMPILER_FORMAT_VERSION = 2
-_GRAPH_ADAPTER_VERSION = 3
-
-
-class _Digest(Protocol):
-    def update(self, value: bytes, /) -> object: ...
-
-
-def _library_suffix(target: str | None) -> str:
-    system = target or platform.system().lower()
-    if "windows" in system:
-        return ".dll"
-    if "macos" in system or "darwin" in system:
-        return ".dylib"
-    return ".so"
 
 
 def _artifact_name(name: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-.")
     if not normalized:
-        raise CompilerError("model name must contain at least one usable character")
+        raise CompilerError(
+            "executable name must contain at least one usable character"
+        )
     return normalized
 
 
-def _hash_file(digest: _Digest, path: Path, label: str) -> None:
-    digest.update(label.encode())
-    digest.update(b"\0")
-    digest.update(path.read_bytes())
-    digest.update(b"\0")
-
-
 class Compiler:
-    """Compile Zig model definitions into cached C-ABI model libraries."""
+    """Use the native ZGC CLI to compile and inspect executable artifacts."""
 
     def __init__(self, config: CompilerConfig | None = None) -> None:
         self.config = config or CompilerConfig()
@@ -63,306 +40,283 @@ class Compiler:
             toolchain_dir=self.config.toolchain_dir,
         )
 
-    def compile_model(
-        self,
-        model: str | os.PathLike[str],
-        *,
-        name: str | None = None,
-        imports: Mapping[str, str | os.PathLike[str]] | None = None,
-        _cache_inputs: tuple[Path, ...] = (),
-    ) -> CompiledArtifact:
-        model_path = Path(model).expanduser().resolve()
-        if not model_path.is_file():
-            raise CompilerError(f"model definition does not exist: {model_path}")
-        source_root = self._resolve_source_root(model_path)
-        toolchain = self.toolchain()
-        modules = {
-            module_name: Path(path).expanduser().resolve()
-            for module_name, path in (imports or {}).items()
-        }
-        for module_name, path in modules.items():
-            if not module_name.isidentifier():
-                raise CompilerError(f"invalid Zig module name: {module_name!r}")
-            if not path.is_file():
-                raise CompilerError(f"module {module_name!r} does not exist: {path}")
-
-        artifact_name = _artifact_name(name or model_path.stem)
-        cache = CompilerCache(self.config.cache_path)
-        key = self._cache_key(
-            model_path,
-            source_root,
-            toolchain,
-            modules,
-            artifact_name,
-            _cache_inputs,
-        )
-        filename = f"{artifact_name}{_library_suffix(self.config.target)}"
-        cached = self._cached_artifact(cache, key, filename)
-        if cached is not None:
-            return cached
-
-        with cache.lock(key):
-            cached = self._cached_artifact(cache, key, filename)
-            if cached is not None:
-                return cached
-            return self._compile(
-                cache,
-                key,
-                filename,
-                model_path,
-                source_root,
-                toolchain,
-                modules,
-            )
-
-    def compile_graph(
-        self,
-        graph: Graph | FrozenGraph | str,
-        *,
-        name: str = "model",
-    ) -> CompiledArtifact:
-        """Canonicalize, cache, and compile a Python or serialized semantic graph."""
-
-        if isinstance(graph, Graph):
-            frozen = graph.freeze()
-        elif isinstance(graph, FrozenGraph):
-            frozen = graph
-        elif isinstance(graph, str):
-            frozen = parse_graph(graph)
-        else:
-            raise TypeError("graph must be Graph, FrozenGraph, or serialized graph text")
-        source_root = self._resolve_source_root(Path.cwd().resolve())
-        model = self._graph_definition(frozen, source_root)
-        return self.compile_model(
-            model,
-            name=name,
-            _cache_inputs=(model.with_name("graph.zgir"),),
-        )
-
-    def compile_graph_file(
-        self,
-        graph: str | os.PathLike[str],
-        *,
-        name: str | None = None,
-    ) -> CompiledArtifact:
-        path = Path(graph).expanduser().resolve()
-        if not path.is_file():
-            raise CompilerError(f"graph definition does not exist: {path}")
-        frozen = parse_graph(path.read_text(encoding="utf-8"))
-        return self.compile_graph(frozen, name=name or path.stem)
-
-    def _graph_definition(self, graph: FrozenGraph, source_root: Path) -> Path:
-        cache = CompilerCache(self.config.cache_path)
-        destination = cache.graph(graph.fingerprint, _GRAPH_ADAPTER_VERSION)
-        model = destination / "model.zig"
-        serialized = destination / "graph.zgir"
-        graph_module = destination / "graph.zig"
-        manifest = destination / "manifest.json"
-        if all(path.is_file() for path in (model, serialized, graph_module, manifest)):
-            return model
-
-        lock_key = f"graph-{graph.fingerprint}-{_GRAPH_ADAPTER_VERSION}"
-        with cache.lock(lock_key):
-            if all(path.is_file() for path in (model, serialized, graph_module, manifest)):
-                return model
-            cache.prepare()
-            parent = destination.parent
-            parent.mkdir(parents=True, exist_ok=True)
-            work = Path(tempfile.mkdtemp(prefix="graph-", dir=cache.temporary))
-            try:
-                (work / "graph.zgir").write_text(graph.serialize(), encoding="utf-8")
-                shutil.copyfile(
-                    source_root / "src" / "artifact" / "zgir_model.zig",
-                    work / "model.zig",
-                )
-                shutil.copyfile(
-                    source_root / "src" / "artifact" / "zgir_source.zig",
-                    work / "graph.zig",
-                )
-                (work / "manifest.json").write_text(
-                    json.dumps(
-                        {
-                            "adapter_format": _GRAPH_ADAPTER_VERSION,
-                            "graph_fingerprint": graph.fingerprint,
-                        },
-                        indent=2,
-                        sort_keys=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
-                if destination.exists():
-                    shutil.rmtree(destination)
-                os.replace(work, destination)
-            finally:
-                if work.exists():
-                    shutil.rmtree(work)
-        return model
-
-    def _resolve_source_root(self, model: Path) -> Path:
-        configured = self.config.zgc_root or os.environ.get("ZGC_SOURCE_ROOT")
-        if configured is not None:
-            root = Path(configured).expanduser().resolve()
-            self._validate_source_root(root)
-            return root
-
-        for start in (Path.cwd().resolve(), *model.parents):
-            for candidate in (start, *start.parents):
-                if (candidate / "src" / "root.zig").is_file() and (
-                    candidate / "src" / "artifact" / "model_abi.zig"
-                ).is_file():
-                    return candidate
+    def _native_cli(self) -> Path:
+        configured = self.config.zgc_cli or os.environ.get("ZGC_CLI")
+        if configured and configured != "auto":
+            executable = shutil.which(os.fspath(configured))
+            if executable is None:
+                raise CompilerError(f"native ZGC CLI does not exist: {configured}")
+            return Path(executable).resolve()
+        root = self.config.zgc_root or os.environ.get("ZGC_SOURCE_ROOT")
+        if root is not None:
+            local = Path(root).expanduser().resolve() / "zig-out" / "bin" / "zgc"
+            if local.is_file():
+                return local
+        for parent in (Path.cwd().resolve(), *Path.cwd().resolve().parents):
+            local = parent / "zig-out" / "bin" / "zgc"
+            if (parent / "src" / "root.zig").is_file() and local.is_file():
+                return local
+        found = shutil.which("zgc")
+        if found is not None:
+            return Path(found).resolve()
         raise CompilerError(
-            "could not locate ZGC compiler sources; set CompilerConfig(zgc_root=...) "
-            "or ZGC_SOURCE_ROOT"
+            "native ZGC CLI not found; set CompilerConfig(zgc_cli=...), "
+            "ZGC_CLI, or build it with 'zig build'"
         )
 
-    @staticmethod
-    def _validate_source_root(root: Path) -> None:
-        required = (
-            root / "src" / "root.zig",
-            root / "src" / "artifact" / "model_abi.zig",
-            root / "src" / "artifact" / "zgir_model.zig",
-            root / "src" / "artifact" / "zgir_source.zig",
-        )
-        if not all(path.is_file() for path in required):
-            raise CompilerError(f"not a ZGC source root: {root}")
-
-    def _cache_key(
-        self,
-        model: Path,
-        source_root: Path,
-        toolchain: ZigToolchain,
-        imports: Mapping[str, Path],
-        artifact_name: str,
-        cache_inputs: tuple[Path, ...],
-    ) -> str:
-        digest = hashlib.sha256()
-        metadata = {
-            "abi": SUPPORTED_ABI_VERSION,
-            "artifact_name": artifact_name,
-            "format": _COMPILER_FORMAT_VERSION,
-            "optimize": self.config.optimize,
-            "target": self.config.target,
-            "zig": toolchain.version,
-        }
-        digest.update(json.dumps(metadata, sort_keys=True).encode())
-        _hash_file(digest, model, "model")
-        for index, path in enumerate(cache_inputs):
-            _hash_file(digest, path, f"cache-input:{index}")
-        for path in sorted((source_root / "src").rglob("*.zig")):
-            _hash_file(digest, path, f"zgc:{path.relative_to(source_root)}")
-        for module_name, path in sorted(imports.items()):
-            _hash_file(digest, path, f"import:{module_name}")
-        return digest.hexdigest()
-
-    @staticmethod
-    def _cached_artifact(
-        cache: CompilerCache,
-        key: str,
-        filename: str,
-    ) -> CompiledArtifact | None:
-        directory = cache.model(key)
-        library = directory / filename
-        manifest = directory / "manifest.json"
-        if library.is_file() and manifest.is_file():
-            return CompiledArtifact(library, manifest, key, True)
-        return None
-
-    def _compile(
-        self,
-        cache: CompilerCache,
-        key: str,
-        filename: str,
-        model: Path,
-        source_root: Path,
-        toolchain: ZigToolchain,
-        imports: Mapping[str, Path],
-    ) -> CompiledArtifact:
-        cache.prepare()
-        work = Path(tempfile.mkdtemp(prefix=f"{key[:12]}-", dir=cache.temporary))
+    def _run(self, *arguments: str, compile_command: bool = False) -> str:
+        command = [str(self._native_cli()), *arguments]
         try:
-            library = work / filename
-            command = self._command(toolchain, source_root, model, imports, library)
-            environment = os.environ.copy()
-            environment["ZIG_LOCAL_CACHE_DIR"] = str(cache.zig)
-            completed = subprocess.run(
-                command,
-                cwd=source_root,
-                env=environment,
-                capture_output=True,
-                text=True,
-            )
-            (work / "build.log").write_text(completed.stdout + completed.stderr)
-            if completed.returncode != 0:
+            completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        except OSError as error:
+            raise CompilerError(f"cannot run native ZGC CLI: {error}") from error
+        if completed.returncode != 0:
+            if compile_command:
                 raise CompilationError(
-                    f"Zig failed to compile {model}",
+                    "native ZGC compilation failed",
                     command=tuple(command),
                     stdout=completed.stdout,
                     stderr=completed.stderr,
                 )
-            manifest_data = {
-                "abi": SUPPORTED_ABI_VERSION,
-                "cache_key": key,
-                "compiler_format": _COMPILER_FORMAT_VERSION,
-                "library": filename,
-                "model": str(model),
-                "optimize": self.config.optimize,
-                "target": self.config.target,
-                "zig": toolchain.version,
-            }
-            (work / "manifest.json").write_text(
-                json.dumps(manifest_data, indent=2, sort_keys=True) + "\n"
+            raise CompilerError(
+                completed.stderr.strip()
+                or f"native ZGC exited with {completed.returncode}"
             )
-            destination = cache.model(key)
-            os.replace(work, destination)
-            return CompiledArtifact(
-                destination / filename,
-                destination / "manifest.json",
-                key,
-                False,
-            )
-        finally:
-            if work.exists():
-                shutil.rmtree(work)
+        return completed.stdout
 
-    def _command(
+    def _compile_file(
         self,
-        toolchain: ZigToolchain,
-        source_root: Path,
-        model: Path,
-        imports: Mapping[str, Path],
-        output: Path,
-    ) -> list[str]:
+        definition: str | os.PathLike[str],
+        *,
+        name: str | None = None,
+        imports: Mapping[str, str | os.PathLike[str]] | None = None,
+    ) -> CompiledArtifact:
+        definition_path = Path(definition).expanduser().resolve()
+        if not definition_path.is_file():
+            raise CompilerError(f"definition does not exist: {definition_path}")
+        if definition_path.suffix not in {".zig", ".zgir"}:
+            raise CompilerError("definition must be a .zig or .zgir file")
+        toolchain = self.toolchain()
         command = [
+            "compile",
+            str(definition_path),
+            "--cache-output",
+            "--cache-dir",
+            str(self.config.cache_path),
+            "--zig",
             str(toolchain.executable),
-            "build-lib",
-            "-dynamic",
-            f"-O{self.config.optimize}",
+            "--optimize",
+            self.config.optimize,
         ]
-        if self.config.target:
-            command.extend(("-target", self.config.target))
-        command.extend(
-            (
-                "--dep",
-                "model",
-                "--dep",
-                "zgc",
-                f"-Mroot={source_root / 'src' / 'artifact' / 'model_abi.zig'}",
-                "--dep",
-                "zgc",
+        if name is not None:
+            command.extend(("--name", _artifact_name(name)))
+        if self.config.inspectable:
+            command.append("--inspectable")
+        if self.config.zgc_root is not None:
+            command.extend(
+                ("--zgc-root", str(Path(self.config.zgc_root).expanduser().resolve()))
             )
+        if self.config.target is not None:
+            command.extend(("--target", self.config.target))
+        if definition_path.suffix == ".zgir":
+            command.extend(("--selection-target", self.config.selection_target))
+            if self.config.frontier_index is not None:
+                command.extend(("--frontier-index", str(self.config.frontier_index)))
+        elif (
+            self.config.frontier_index is not None
+            or self.config.selection_target != "balanced"
+        ):
+            raise CompilerError("executable selection options require a .zgir graph")
+        for module_name, path in sorted((imports or {}).items()):
+            if definition_path.suffix == ".zgir":
+                raise CompilerError(
+                    "serialized graphs do not accept Zig module imports"
+                )
+            if not module_name.isidentifier():
+                raise CompilerError(f"invalid Zig module name: {module_name!r}")
+            module_path = Path(path).expanduser().resolve()
+            if not module_path.is_file():
+                raise CompilerError(
+                    f"module {module_name!r} does not exist: {module_path}"
+                )
+            command.extend(("--import", f"{module_name}={module_path}"))
+        library = Path(self._run(*command, compile_command=True).strip()).resolve()
+        if not library.is_file():
+            raise CompilerError(f"native ZGC did not produce a library: {library}")
+        fingerprint = (
+            self._compiled_fingerprint(library) if self.config.target is None else None
         )
-        graph_module = model.with_name("graph.zig")
-        if graph_module.is_file():
-            command.extend(("--dep", "graph"))
-        for module_name in sorted(imports):
-            command.extend(("--dep", module_name))
-        command.append(f"-Mmodel={model}")
-        command.append(f"-Mzgc={source_root / 'src' / 'root.zig'}")
-        if graph_module.is_file():
-            command.append(f"-Mgraph={graph_module}")
-        for module_name, path in sorted(imports.items()):
-            command.append(f"-M{module_name}={path}")
-        command.append(f"-femit-bin={output}")
-        return command
+        return CompiledArtifact(path=library, structural_fingerprint=fingerprint)
+
+    def _compile_graph(
+        self, graph: Graph | FrozenGraph | str, *, name: str = "executable"
+    ) -> CompiledArtifact:
+        """Return a cached graph artifact or delegate compilation to native ZGC."""
+        if isinstance(graph, (Graph, FrozenGraph)):
+            fingerprint = graph.fingerprint
+        elif isinstance(graph, str):
+            fingerprint = hashlib.sha256(graph.encode("utf-8")).hexdigest()
+        else:
+            raise TypeError(
+                "graph must be Graph, FrozenGraph, or serialized graph text"
+            )
+        artifact_name = _artifact_name(name)
+        index = self._graph_cache_index(fingerprint, artifact_name)
+        cached = self._cached_graph_artifact(index)
+        if cached is not None:
+            return cached
+        serialized = graph if isinstance(graph, str) else graph.serialize()
+        with tempfile.TemporaryDirectory(prefix="zgc-graph-") as temporary:
+            path = Path(temporary) / "graph.zgir"
+            path.write_text(serialized, encoding="utf-8")
+            artifact = self._compile_file(path, name=artifact_name)
+        index.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "library": str(artifact.path),
+            "library_stamp": self._file_stamp(artifact.path),
+            "structural_fingerprint": artifact.structural_fingerprint,
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=index.parent, delete=False
+        ) as temporary:
+            json.dump(payload, temporary)
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, index)
+        return artifact
+
+    def _graph_cache_index(self, fingerprint: str, name: str) -> Path:
+        """Partition graph entries by every setting that affects compilation."""
+        native = self._native_cli()
+        zig = self.toolchain()
+        root = self._source_root(native)
+        settings = {
+            "format": 1,
+            "abi": SUPPORTED_ABI_VERSION,
+            "name": name,
+            "optimize": self.config.optimize,
+            "target": self.config.target,
+            "selection_target": self.config.selection_target,
+            "frontier_index": self.config.frontier_index,
+            "inspectable": self.config.inspectable,
+            "native": str(native),
+            "native_stamp": self._file_stamp(native),
+            "zig": str(zig.executable),
+            "zig_version": zig.version,
+            "zig_stamp": self._file_stamp(zig.executable),
+            "source_root": str(root) if root is not None else None,
+            "source_stamp": self._source_stamp(root) if root is not None else None,
+        }
+        variant = hashlib.sha256(
+            json.dumps(settings, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return (
+            self.config.cache_path
+            / "python"
+            / "graphs"
+            / fingerprint
+            / f"{variant}.json"
+        )
+
+    def _source_root(self, native: Path) -> Path | None:
+        configured = self.config.zgc_root or os.environ.get("ZGC_SOURCE_ROOT")
+        if configured is not None:
+            return Path(configured).expanduser().resolve()
+        for candidate in (
+            native.parents[2],
+            Path.cwd().resolve(),
+            *Path.cwd().resolve().parents,
+        ):
+            if (candidate / "src" / "root.zig").is_file():
+                return candidate
+        return None
+
+    @staticmethod
+    def _file_stamp(path: Path) -> tuple[int, int]:
+        stat = path.stat()
+        return stat.st_size, stat.st_mtime_ns
+
+    @classmethod
+    def _source_stamp(cls, root: Path) -> str:
+        digest = hashlib.sha256()
+        for path in sorted((root / "src").rglob("*.zig")):
+            digest.update(str(path.relative_to(root)).encode("utf-8"))
+            digest.update(repr(cls._file_stamp(path)).encode("ascii"))
+        return digest.hexdigest()
+
+    def _cached_graph_artifact(self, index: Path) -> CompiledArtifact | None:
+        try:
+            entry = json.loads(index.read_text(encoding="utf-8"))
+            library = Path(entry["library"]).resolve()
+            if (
+                not library.is_relative_to(self.config.cache_path)
+                or not library.is_file()
+            ):
+                return None
+            if list(self._file_stamp(library)) != entry["library_stamp"]:
+                return None
+            fingerprint = entry["structural_fingerprint"]
+            if self.config.target is None:
+                actual = self._compiled_fingerprint(library)
+                if actual != fingerprint:
+                    return None
+            return CompiledArtifact(library, fingerprint)
+        except (OSError, ValueError, KeyError, TypeError, CompilerError):
+            return None
+
+    def compile(
+        self,
+        definition: Graph | FrozenGraph | str | os.PathLike[str],
+        *,
+        name: str | None = None,
+        imports: Mapping[str, str | os.PathLike[str]] | None = None,
+    ) -> CompiledArtifact:
+        """Compile a graph, serialized graph, or definition file."""
+        if isinstance(definition, (Graph, FrozenGraph)):
+            if imports:
+                raise CompilerError("Python graphs do not accept Zig module imports")
+            return self._compile_graph(definition, name=name or "executable")
+        if isinstance(definition, str) and (
+            definition.startswith("zgir ") or "\n" in definition
+        ):
+            if imports:
+                raise CompilerError(
+                    "serialized graphs do not accept Zig module imports"
+                )
+            return self._compile_graph(definition, name=name or "executable")
+        return self._compile_file(definition, name=name, imports=imports)
+
+    def inspect(
+        self,
+        executable: CompiledArtifact | str | os.PathLike[str],
+        section: str = "all",
+    ) -> str:
+        """Return native ZGC's inspection text for a compiled executable."""
+        path = (
+            executable.path if isinstance(executable, CompiledArtifact) else executable
+        )
+        return self._run("inspect", str(Path(path).expanduser().resolve()), section)
+
+    def cache_path(self) -> Path:
+        """Return the cache path selected by native ZGC."""
+        return Path(
+            self._run(
+                "cache", "path", "--cache-dir", str(self.config.cache_path)
+            ).strip()
+        )
+
+    def clear_cache(self) -> None:
+        """Ask native ZGC to clear the configured cache."""
+        self._run("cache", "clear", "--cache-dir", str(self.config.cache_path))
+
+    @staticmethod
+    def _compiled_fingerprint(library: Path) -> int:
+        try:
+            compiled = ctypes.CDLL(str(library))
+            compiled.zgc_abi_version.restype = ctypes.c_uint32
+            compiled.zgc_executable_structural_fingerprint.restype = ctypes.c_uint64
+            version = compiled.zgc_abi_version()
+            if version != SUPPORTED_ABI_VERSION:
+                raise CompilerError(f"executable has unsupported ABI version {version}")
+            return int(compiled.zgc_executable_structural_fingerprint())
+        except (OSError, AttributeError) as error:
+            raise CompilerError(f"cannot load executable: {library}") from error

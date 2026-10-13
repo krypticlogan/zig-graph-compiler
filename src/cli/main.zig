@@ -15,16 +15,121 @@ pub fn main(init: std.process.Init) !void {
         try usage(stderr);
         return;
     }
+    if (std.mem.eql(u8, args[1], "inspect")) {
+        inspect(init, args[2..], stderr) catch |err| {
+            try stderr.print("zgc inspect failed: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        return;
+    }
+    if (std.mem.eql(u8, args[1], "cache")) {
+        cache(init, args[2..], stderr) catch |err| {
+            try stderr.print("zgc cache failed: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        return;
+    }
     if (!std.mem.eql(u8, args[1], "compile")) {
         try stderr.print("unknown command: {s}\n\n", .{args[1]});
         try usage(stderr);
+        try stderr.flush();
         std.process.exit(2);
     }
     compile(init, args[2..], stderr) catch |err| {
         try stderr.print("zgc compile failed: {s}\n", .{@errorName(err)});
+        try stderr.flush();
         std.process.exit(1);
     };
 }
+
+fn cachePath(init: std.process.Init, configured: ?[]const u8) ![]const u8 {
+    const allocator = init.arena.allocator();
+    const cwd = try std.process.currentPathAlloc(init.io, allocator);
+    const path = configured orelse init.environ_map.get("ZGC_CACHE_DIR") orelse ".zgc-cache";
+    return std.fs.path.resolve(allocator, &.{ cwd, path });
+}
+
+fn cache(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !void {
+    if (args.len == 1 and isHelp(args[0])) {
+        try cacheUsage(stderr);
+        return;
+    }
+    if (args.len == 0) {
+        try cacheUsage(stderr);
+        return error.MissingCacheAction;
+    }
+    var configured: ?[]const u8 = null;
+    var index: usize = 1;
+    while (index < args.len) : (index += 1) {
+        if (!std.mem.eql(u8, args[index], "--cache-dir")) return error.InvalidCacheOption;
+        index += 1;
+        if (index == args.len) return error.MissingCachePath;
+        configured = args[index];
+    }
+    const path = try cachePath(init, configured);
+    if (std.mem.eql(u8, args[0], "path")) {
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+        try stdout_writer.interface.print("{s}\n", .{path});
+        try stdout_writer.interface.flush();
+    } else if (std.mem.eql(u8, args[0], "clear")) {
+        const cwd = try std.process.currentPathAlloc(init.io, init.arena.allocator());
+        if (std.mem.eql(u8, path, cwd) or std.mem.eql(u8, path, std.fs.path.sep_str)) return error.UnsafeCachePath;
+        if (init.environ_map.get("HOME")) |home| {
+            if (std.mem.eql(u8, path, home)) return error.UnsafeCachePath;
+        }
+        try std.Io.Dir.deleteTree(.cwd(), init.io, path);
+    } else {
+        try cacheUsage(stderr);
+        return error.InvalidCacheAction;
+    }
+}
+
+fn inspect(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !void {
+    if (args.len == 1 and isHelp(args[0])) {
+        try inspectUsage(stderr);
+        return;
+    }
+    if (args.len == 0 or args.len > 2) {
+        try inspectUsage(stderr);
+        return error.InvalidArguments;
+    }
+    const section = if (args.len == 2) inspectSection(args[1]) orelse {
+        try inspectUsage(stderr);
+        return error.InvalidInspectionSection;
+    } else 0;
+    const allocator = init.arena.allocator();
+    const cwd = try std.process.currentPathAlloc(init.io, allocator);
+    const library_path = try std.fs.path.resolve(allocator, &.{ cwd, args[0] });
+    var library = try std.DynLib.open(library_path);
+    defer library.close();
+    const abi_version = library.lookup(*const fn () callconv(.c) u32, "zgc_abi_version") orelse return error.NotZgcExecutable;
+    if (abi_version() != build_options.abi_version) return error.IncompatibleAbiVersion;
+    const render = library.lookup(*const fn (u32, ?[*]u8, usize, ?*usize) callconv(.c) c_int, "zgc_executable_inspect") orelse {
+        try stderr.writeAll("this executable is not inspectable; compile it with --inspectable\n");
+        return error.InspectionUnavailable;
+    };
+    var required: usize = 0;
+    if (render(section, null, 0, &required) != 0) return error.InspectionFailed;
+    const bytes = try allocator.alloc(u8, required);
+    if (render(section, bytes.ptr, bytes.len, &required) != 0) return error.InspectionFailed;
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+    try stdout_writer.interface.writeAll(bytes[0..required]);
+    try stdout_writer.interface.flush();
+}
+
+fn inspectSection(name: []const u8) ?u32 {
+    const sections = [_][]const u8{ "all", "summary", "raw-graph", "semantic-graph", "executable", "representations", "tree", "memory-plan" };
+    for (sections, 0..) |section, index| {
+        if (std.mem.eql(u8, name, section)) return @intCast(index);
+    }
+    return null;
+}
+
+const DefinitionImport = struct { name: []const u8, path: []const u8 };
 
 fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !void {
     const allocator = init.arena.allocator();
@@ -32,8 +137,15 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
     var output: ?[]const u8 = null;
     var optimize: []const u8 = "ReleaseFast";
     var target: ?[]const u8 = null;
+    var selection_target: []const u8 = "balanced";
+    var frontier_index: ?usize = null;
     var zig: []const u8 = "zig";
     var source_root: []const u8 = build_options.source_root;
+    var cache_dir: ?[]const u8 = null;
+    var cached_output = false;
+    var inspectable = false;
+    var requested_name: ?[]const u8 = null;
+    var imports: std.ArrayList(DefinitionImport) = .empty;
 
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
@@ -53,6 +165,14 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
             index += 1;
             if (index == args.len) return error.MissingTarget;
             target = args[index];
+        } else if (std.mem.eql(u8, arg, "--selection-target")) {
+            index += 1;
+            if (index == args.len) return error.MissingSelectionTarget;
+            selection_target = args[index];
+        } else if (std.mem.eql(u8, arg, "--frontier-index")) {
+            index += 1;
+            if (index == args.len) return error.MissingFrontierIndex;
+            frontier_index = try std.fmt.parseInt(usize, args[index], 10);
         } else if (std.mem.eql(u8, arg, "--zig")) {
             index += 1;
             if (index == args.len) return error.MissingZigPath;
@@ -61,6 +181,24 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
             index += 1;
             if (index == args.len) return error.MissingSourceRoot;
             source_root = args[index];
+        } else if (std.mem.eql(u8, arg, "--cache-dir")) {
+            index += 1;
+            if (index == args.len) return error.MissingCachePath;
+            cache_dir = args[index];
+        } else if (std.mem.eql(u8, arg, "--cache-output")) {
+            cached_output = true;
+        } else if (std.mem.eql(u8, arg, "--inspectable")) {
+            inspectable = true;
+        } else if (std.mem.eql(u8, arg, "--name")) {
+            index += 1;
+            if (index == args.len) return error.MissingArtifactName;
+            requested_name = args[index];
+        } else if (std.mem.eql(u8, arg, "--import")) {
+            index += 1;
+            if (index == args.len) return error.MissingImport;
+            const equal = std.mem.indexOfScalar(u8, args[index], '=') orelse return error.InvalidImport;
+            if (equal == 0 or equal + 1 == args[index].len) return error.InvalidImport;
+            try imports.append(allocator, .{ .name = args[index][0..equal], .path = args[index][equal + 1 ..] });
         } else if (arg.len != 0 and arg[0] == '-') {
             try stderr.print("unknown compile option: {s}\n", .{arg});
             return error.InvalidOption;
@@ -70,60 +208,113 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
     }
 
     const input_path = input orelse return error.MissingInput;
-    if (!std.mem.eql(u8, std.fs.path.extension(input_path), ".zgir")) return error.ExpectedZgir;
+    const is_zgir = std.mem.eql(u8, std.fs.path.extension(input_path), ".zgir");
+    if (!is_zgir and !std.mem.eql(u8, std.fs.path.extension(input_path), ".zig")) return error.ExpectedDefinition;
+    if (is_zgir and imports.items.len != 0) return error.GraphDoesNotAcceptImports;
+    if (!is_zgir and (!std.mem.eql(u8, selection_target, "balanced") or frontier_index != null)) return error.SelectionRequiresZgir;
     if (!validOptimize(optimize)) return error.InvalidOptimizeMode;
+    if (!validSelectionTarget(selection_target)) return error.InvalidSelectionTarget;
+    if (cached_output and output != null) return error.ConflictingOutputOptions;
+    if (requested_name) |name| {
+        if (!validArtifactName(name)) return error.InvalidArtifactName;
+    }
 
     const cwd = try std.process.currentPathAlloc(init.io, allocator);
+    const cache_root = try cachePath(init, cache_dir);
+    const zig_cache = try std.fs.path.join(allocator, &.{ cache_root, "zig" });
+    var cache_directory = try std.Io.Dir.createDirPathOpen(.cwd(), init.io, zig_cache, .{});
+    cache_directory.close(init.io);
     const absolute_input = try std.fs.path.resolve(allocator, &.{ cwd, input_path });
     const absolute_root = try std.fs.path.resolve(allocator, &.{ cwd, source_root });
-    const output_path = output orelse try defaultOutput(allocator, input_path);
+    const output_path = if (cached_output) blk: {
+        var digest: [32]u8 = undefined;
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(try std.Io.Dir.readFileAlloc(.cwd(), init.io, absolute_input, allocator, .limited(1024 * 1024 * 1024)));
+        if (!is_zgir) hasher.update(absolute_input);
+        hasher.update(absolute_root);
+        hasher.update(optimize);
+        hasher.update(target orelse "native");
+        hasher.update(selection_target);
+        hasher.update(zig);
+        hasher.update(if (inspectable) "inspection:on" else "inspection:off");
+        if (frontier_index) |value| hasher.update(try std.fmt.allocPrint(allocator, "{d}", .{value}));
+        for (imports.items) |item| {
+            const path = try std.fs.path.resolve(allocator, &.{ cwd, item.path });
+            hasher.update(item.name);
+            hasher.update(path);
+            hasher.update(try std.Io.Dir.readFileAlloc(.cwd(), init.io, path, allocator, .limited(1024 * 1024 * 1024)));
+        }
+        hasher.final(&digest);
+        const hex = std.fmt.bytesToHex(digest, .lower);
+        const filename = try defaultOutput(allocator, requested_name orelse input_path);
+        break :blk try std.fs.path.join(allocator, &.{ cache_root, "executables", &hex, filename });
+    } else output orelse try defaultOutput(allocator, requested_name orelse input_path);
     const absolute_output = try std.fs.path.resolve(allocator, &.{ cwd, output_path });
-    const graph = try std.Io.Dir.readFileAlloc(.cwd(), init.io, absolute_input, allocator, .limited(1024 * 1024 * 1024));
-    const adapter_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", "zgir_model.zig" });
-    const adapter_source = try std.Io.Dir.readFileAlloc(.cwd(), init.io, adapter_path, allocator, .limited(1024 * 1024));
-    const source_adapter_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", "zgir_source.zig" });
-    const source_adapter = try std.Io.Dir.readFileAlloc(.cwd(), init.io, source_adapter_path, allocator, .limited(1024 * 1024));
-
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(graph, &digest, .{});
-    const hex = std.fmt.bytesToHex(digest, .lower);
-    const work_path = try std.fs.path.join(allocator, &.{ cwd, ".zig-cache", "zgc-cli", &hex });
-    var work = try std.Io.Dir.createDirPathOpen(.cwd(), init.io, work_path, .{});
-    defer work.close(init.io);
-    try work.writeFile(init.io, .{ .sub_path = "graph.zgir", .data = graph });
-    try work.writeFile(init.io, .{ .sub_path = "model.zig", .data = adapter_source });
-    try work.writeFile(init.io, .{ .sub_path = "graph.zig", .data = source_adapter });
-
-    const model_path = try std.fs.path.join(allocator, &.{ work_path, "model.zig" });
-    const graph_path = try std.fs.path.join(allocator, &.{ work_path, "graph.zig" });
-    const abi_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", "model_abi.zig" });
+    if (cached_output) {
+        var output_directory = try std.Io.Dir.createDirPathOpen(.cwd(), init.io, std.fs.path.dirname(absolute_output).?, .{});
+        output_directory.close(init.io);
+    }
+    var definition_path = absolute_input;
+    var graph_path: ?[]const u8 = null;
+    if (is_zgir) {
+        const graph = try std.Io.Dir.readFileAlloc(.cwd(), init.io, absolute_input, allocator, .limited(1024 * 1024 * 1024));
+        const adapter_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", "zgir_executable.zig" });
+        const adapter_source = try std.Io.Dir.readFileAlloc(.cwd(), init.io, adapter_path, allocator, .limited(1024 * 1024));
+        const source_adapter_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", "zgir_source.zig" });
+        const source_adapter = try std.Io.Dir.readFileAlloc(.cwd(), init.io, source_adapter_path, allocator, .limited(1024 * 1024));
+        const frontier_text = if (frontier_index) |value| try std.fmt.allocPrint(allocator, "{d}", .{value}) else "null";
+        var digest: [32]u8 = undefined;
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(graph);
+        hasher.update(selection_target);
+        hasher.update(frontier_text);
+        hasher.final(&digest);
+        const hex = std.fmt.bytesToHex(digest, .lower);
+        const work_path = try std.fs.path.join(allocator, &.{ cache_root, "graphs", &hex });
+        var work = try std.Io.Dir.createDirPathOpen(.cwd(), init.io, work_path, .{});
+        defer work.close(init.io);
+        try work.writeFile(init.io, .{ .sub_path = "graph.zgir", .data = graph });
+        try work.writeFile(init.io, .{ .sub_path = "executable.zig", .data = adapter_source });
+        const configured_source_adapter = try std.fmt.allocPrint(
+            allocator,
+            "{s}\npub const executable_options = .{{ .target = .{s}, .frontier_index = {s} }};\n",
+            .{ source_adapter, selection_target, frontier_text },
+        );
+        try work.writeFile(init.io, .{ .sub_path = "graph.zig", .data = configured_source_adapter });
+        definition_path = try std.fs.path.join(allocator, &.{ work_path, "executable.zig" });
+        graph_path = try std.fs.path.join(allocator, &.{ work_path, "graph.zig" });
+    }
+    const abi_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", if (inspectable) "inspectable_executable_abi.zig" else "executable_abi.zig" });
     const root_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "root.zig" });
     const optimize_arg = try std.fmt.allocPrint(allocator, "-O{s}", .{optimize});
     const root_arg = try std.fmt.allocPrint(allocator, "-Mroot={s}", .{abi_path});
-    const model_arg = try std.fmt.allocPrint(allocator, "-Mmodel={s}", .{model_path});
+    const executable_arg = try std.fmt.allocPrint(allocator, "-Mexecutable={s}", .{definition_path});
     const zgc_arg = try std.fmt.allocPrint(allocator, "-Mzgc={s}", .{root_path});
-    const graph_arg = try std.fmt.allocPrint(allocator, "-Mgraph={s}", .{graph_path});
     const output_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{absolute_output});
-
-    var command: [24][]const u8 = undefined;
-    var count: usize = 0;
-    for ([_][]const u8{ zig, "build-lib", "-dynamic", optimize_arg }) |arg| {
-        command[count] = arg;
-        count += 1;
-    }
+    var command: std.ArrayList([]const u8) = .empty;
+    try command.appendSlice(allocator, &.{ zig, "build-lib", "-dynamic", optimize_arg });
     if (target) |value| {
-        command[count] = "-target";
-        command[count + 1] = value;
-        count += 2;
+        try command.appendSlice(allocator, &.{ "-target", value });
     }
-    for ([_][]const u8{ "--dep", "model", "--dep", "zgc", root_arg, "--dep", "zgc", "--dep", "graph", model_arg, zgc_arg, graph_arg, output_arg }) |arg| {
-        command[count] = arg;
-        count += 1;
+    try command.appendSlice(allocator, &.{ "--dep", "executable", "--dep", "zgc", root_arg, "--dep", "zgc" });
+    if (graph_path != null) try command.appendSlice(allocator, &.{ "--dep", "graph" });
+    for (imports.items) |item| try command.appendSlice(allocator, &.{ "--dep", item.name });
+    try command.appendSlice(allocator, &.{ executable_arg, zgc_arg });
+    if (graph_path) |path| {
+        try command.append(allocator, try std.fmt.allocPrint(allocator, "-Mgraph={s}", .{path}));
     }
+    for (imports.items) |item| {
+        const path = try std.fs.path.resolve(allocator, &.{ cwd, item.path });
+        try command.append(allocator, try std.fmt.allocPrint(allocator, "-M{s}={s}", .{ item.name, path }));
+    }
+    try command.append(allocator, output_arg);
 
+    var environment = try init.environ_map.clone(allocator);
+    defer environment.deinit();
+    try environment.put("ZIG_LOCAL_CACHE_DIR", zig_cache);
     const result = try std.process.run(allocator, init.io, .{
-        .argv = command[0..count],
-        .environ_map = init.environ_map,
+        .argv = command.items,
+        .environ_map = &environment,
         .stdout_limit = .limited(16 * 1024 * 1024),
         .stderr_limit = .limited(16 * 1024 * 1024),
     });
@@ -159,6 +350,21 @@ fn validOptimize(value: []const u8) bool {
         std.mem.eql(u8, value, "ReleaseSmall");
 }
 
+fn validArtifactName(name: []const u8) bool {
+    if (name.len == 0 or name[0] == '.') return false;
+    for (name) |byte| {
+        if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_' and byte != '.') return false;
+    }
+    return true;
+}
+
+fn validSelectionTarget(value: []const u8) bool {
+    return std.mem.eql(u8, value, "balanced") or
+        std.mem.eql(u8, value, "memory") or
+        std.mem.eql(u8, value, "fast") or
+        std.mem.eql(u8, value, "small");
+}
+
 fn isHelp(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help");
 }
@@ -168,23 +374,48 @@ fn usage(writer: *std.Io.Writer) !void {
         \\usage: zgc <command> [options]
         \\
         \\commands:
-        \\  compile    specialize a .zgir graph and emit a native shared library
+        \\  compile    specialize a .zgir or Zig definition and emit a native shared library
+        \\  inspect    show metadata and graph representations from a shared library
+        \\  cache      show or clear the native compiler cache
         \\
-        \\run 'zgc compile --help' for compile options
+        \\run 'zgc <command> --help' for command options
+        \\
+    );
+}
+
+fn cacheUsage(writer: *std.Io.Writer) !void {
+    try writer.writeAll(
+        \\usage: zgc cache <path|clear> [--cache-dir <path>]
+        \\
+    );
+}
+
+fn inspectUsage(writer: *std.Io.Writer) !void {
+    try writer.writeAll(
+        \\usage: zgc inspect <executable-library> [all|summary|raw-graph|semantic-graph|executable|representations|tree|memory-plan]
+        \\
+        \\The default section is all. Inspection loads the library but does not initialize or run the runtime.
         \\
     );
 }
 
 fn compileUsage(writer: *std.Io.Writer) !void {
     try writer.writeAll(
-        \\usage: zgc compile <graph.zgir> [-o <library>] [options]
+        \\usage: zgc compile <graph.zgir|definition.zig> [-o <library>] [options]
         \\
         \\options:
         \\  -o, --output <path>      output shared library path
         \\  -O, --optimize <mode>   Debug, ReleaseSafe, ReleaseFast, or ReleaseSmall
         \\  --target <triple>        Zig compilation target
+        \\  --selection-target <name>  balanced, memory, fast, or small
+        \\  --frontier-index <n>   select a retained executable by index
         \\  --zig <path>             Zig executable (default: zig from PATH)
         \\  --zgc-root <path>        ZGC source checkout
+        \\  --cache-dir <path>       local Zig and graph cache (default: .zgc-cache)
+        \\  --cache-output           emit under the native executable cache
+        \\  --inspectable            embed inspection data and export zgc_executable_inspect
+        \\  --name <name>            cached artifact filename stem
+        \\  --import <name=path>     Zig module import (repeatable for .zig definitions)
         \\
     );
 }

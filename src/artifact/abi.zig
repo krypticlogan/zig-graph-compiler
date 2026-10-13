@@ -1,3 +1,4 @@
+//! ABI for interaction with compiled graphs at runtime
 const std = @import("std");
 
 pub const version: u32 = 1;
@@ -5,7 +6,7 @@ pub const version: u32 = 1;
 pub const Status = enum(c_int) {
     ok = 0,
     invalid_argument = 1,
-    invalid_model_storage = 2,
+    invalid_runtime_storage = 2,
     invalid_source = 3,
     invalid_output = 4,
     size_mismatch = 5,
@@ -13,6 +14,7 @@ pub const Status = enum(c_int) {
     incompatible_binding = 7,
     missing_binding = 8,
     buffer_too_small = 9,
+    out_of_memory = 10,
 };
 
 pub const Dtype = enum(u32) {
@@ -46,7 +48,7 @@ pub const TensorDescriptor = extern struct {
     strides: ?[*]const isize,
 };
 
-/// One named source in the compiled model contract.
+/// One named source in the compiled runtime contract.
 pub const SourceDescriptor = extern struct {
     key: u32,
     name: [*:0]const u8,
@@ -63,48 +65,80 @@ pub const TensorView = extern struct {
     tensor: TensorDescriptor,
 };
 
-/// C-compatible operations specialized around one generated model type.
-pub fn Adapter(comptime Model: type) type {
+/// C-compatible operations specialized around one compiled executable.
+pub fn Adapter(comptime Executable: type) type {
     return struct {
         const Self = @This();
-        const SourceKey = Model.SourceKeyType;
-        const graph = Model.executable;
+        const Runtime = Executable.Runtime;
+        const SourceKey = Executable.SourceKeyType;
+        const graph = Executable.program;
 
         pub fn abiVersion() callconv(.c) u32 {
             return version;
         }
 
-        pub fn modelSize() callconv(.c) usize {
-            return @sizeOf(Model);
+        pub fn executableStructuralFingerprint() callconv(.c) u64 {
+            return Executable.structural_fingerprint;
         }
 
-        pub fn modelAlignment() callconv(.c) usize {
-            return @alignOf(Model);
+        pub fn runtimeSize() callconv(.c) usize {
+            return @sizeOf(Runtime);
         }
 
-        pub fn modelMutableBytes() callconv(.c) usize {
-            return Model.memory_plan.byte_count;
+        pub fn runtimeAlignment() callconv(.c) usize {
+            return @alignOf(Runtime);
         }
 
-        pub fn modelInit(storage: ?*anyopaque, storage_size: usize) callconv(.c) Status {
-            const model = mutableModel(storage, storage_size) orelse return storageStatus(storage, storage_size);
-            model.* = Model.init();
+        pub fn runtimeMutableBytes() callconv(.c) usize {
+            return Executable.memory_plan.byte_count;
+        }
+
+        /// Render a compile-time executable section into caller-owned storage.
+        /// A null destination with zero capacity queries the required size.
+        pub fn executableInspect(section: u32, destination: ?[*]u8, capacity: usize, required: ?*usize) callconv(.c) Status {
+            const count = required orelse return .invalid_argument;
+            if (destination == null and capacity != 0) return .invalid_argument;
+            const command: []const u8 = switch (section) {
+                0 => "all",
+                1 => "summary",
+                2 => "raw-graph",
+                3 => "semantic-graph",
+                4 => "executable",
+                5 => "representations",
+                6 => "tree",
+                7 => "memory-plan",
+                else => return .invalid_argument,
+            };
+            var output = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+            defer output.deinit();
+            _ = @import("../zgc/core/inspect.zig").runCli(Executable, &.{command}, &output.writer) catch return .out_of_memory;
+            const bytes = output.written();
+            count.* = bytes.len;
+            const buffer = destination orelse return .ok;
+            if (capacity < bytes.len) return .buffer_too_small;
+            @memcpy(buffer[0..bytes.len], bytes);
             return .ok;
         }
 
-        pub fn modelDeinit(storage: ?*anyopaque) callconv(.c) void {
+        pub fn runtimeInit(storage: ?*anyopaque, storage_size: usize) callconv(.c) Status {
+            const runtime = mutableRuntime(storage, storage_size) orelse return storageStatus(storage, storage_size);
+            runtime.* = Runtime.init();
+            return .ok;
+        }
+
+        pub fn runtimeDeinit(storage: ?*anyopaque) callconv(.c) void {
             _ = storage;
         }
 
-        pub fn modelRun(storage: ?*anyopaque) callconv(.c) Status {
-            const model = mutableModel(storage, @sizeOf(Model)) orelse return .invalid_model_storage;
+        pub fn runtimeRun(storage: ?*anyopaque) callconv(.c) Status {
+            const runtime = mutableRuntime(storage, @sizeOf(Runtime)) orelse return .invalid_runtime_storage;
             inline for (0..graph.sources.len) |source_id| {
                 if (comptime graph.sources[source_id] == null) continue;
-                if (comptime Model.source_plan.source_bindings[source_id] != .bound) continue;
-                const key: SourceKey = @enumFromInt(source_id);
-                if (!model.inputIsBound(key)) return .missing_binding;
+                if (comptime Executable.source_plan.source_bindings[source_id] != .bound) continue;
+                const key: SourceKey = @fromBackingInt(@intCast(source_id));
+                if (!runtime.inputIsBound(key)) return .missing_binding;
             }
-            model.run();
+            runtime.run();
             return .ok;
         }
 
@@ -123,7 +157,7 @@ pub fn Adapter(comptime Model: type) type {
                         .key = @intCast(source_id),
                         .name = comptime sourceName(source_id),
                         .kind = sourceKind(source.kind),
-                        .binding = comptime sourceBinding(Model.source_plan.source_bindings[source_id]),
+                        .binding = comptime sourceBinding(Executable.source_plan.source_bindings[source_id]),
                         .tensor = tensorDescriptor(info),
                     };
                     return .ok;
@@ -134,20 +168,20 @@ pub fn Adapter(comptime Model: type) type {
         }
 
         /// Copy logical row-major bytes into an owned source. The generated
-        /// model packs values into its selected physical layout.
-        pub fn modelCopySource(
+        /// runtime packs values into its selected physical layout.
+        pub fn runtimeCopySource(
             storage: ?*anyopaque,
             source_key: u32,
             data: ?*const anyopaque,
             byte_count: usize,
         ) callconv(.c) Status {
-            const model = mutableModel(storage, @sizeOf(Model)) orelse return .invalid_model_storage;
+            const runtime = mutableRuntime(storage, @sizeOf(Runtime)) orelse return .invalid_runtime_storage;
             const source_data = data orelse return .invalid_argument;
 
             inline for (0..graph.sources.len) |source_id| {
                 const source = comptime graph.sources[source_id] orelse continue;
                 if (source_key == source_id) {
-                    if (comptime Model.source_plan.source_bindings[source_id] != .owned) {
+                    if (comptime Executable.source_plan.source_bindings[source_id] != .owned) {
                         return .incompatible_binding;
                     }
                     const info = comptime graph.tensors[source.tensor].?;
@@ -158,8 +192,8 @@ pub fn Adapter(comptime Model: type) type {
                     const bytes = raw[0..byte_count];
                     const aligned: []align(@alignOf(T)) const u8 = @alignCast(bytes);
                     const values = std.mem.bytesAsSlice(T, aligned);
-                    const key: SourceKey = @enumFromInt(source_id);
-                    model.copySource(key, values) catch return .size_mismatch;
+                    const key: SourceKey = @fromBackingInt(@intCast(source_id));
+                    runtime.copySource(key, values) catch return .size_mismatch;
                     return .ok;
                 }
             }
@@ -168,19 +202,19 @@ pub fn Adapter(comptime Model: type) type {
 
         /// Bind physical source storage without copying. The supplied bytes
         /// must follow the layout returned by `sourceDescriptor`.
-        pub fn modelBindSource(
+        pub fn runtimeBindSource(
             storage: ?*anyopaque,
             source_key: u32,
             data: ?*const anyopaque,
             byte_count: usize,
         ) callconv(.c) Status {
-            const model = mutableModel(storage, @sizeOf(Model)) orelse return .invalid_model_storage;
+            const runtime = mutableRuntime(storage, @sizeOf(Runtime)) orelse return .invalid_runtime_storage;
             const source_data = data orelse return .invalid_argument;
 
             inline for (0..graph.sources.len) |source_id| {
                 const source = comptime graph.sources[source_id] orelse continue;
                 if (source_key == source_id) {
-                    if (comptime Model.source_plan.source_bindings[source_id] != .bound) {
+                    if (comptime Executable.source_plan.source_bindings[source_id] != .bound) {
                         return .incompatible_binding;
                     }
                     const info = comptime graph.tensors[source.tensor].?;
@@ -191,8 +225,8 @@ pub fn Adapter(comptime Model: type) type {
                     const bytes = raw[0..byte_count];
                     const aligned: []align(@alignOf(T)) const u8 = @alignCast(bytes);
                     const values = std.mem.bytesAsSlice(T, aligned);
-                    const key: SourceKey = @enumFromInt(source_id);
-                    model.bindInput(key, values) catch return .size_mismatch;
+                    const key: SourceKey = @fromBackingInt(@intCast(source_id));
+                    runtime.bindInput(key, values) catch return .size_mismatch;
                     return .ok;
                 }
             }
@@ -215,18 +249,18 @@ pub fn Adapter(comptime Model: type) type {
             return .invalid_output;
         }
 
-        pub fn modelOutputView(
+        pub fn runtimeOutputView(
             storage: ?*const anyopaque,
             output_index: usize,
             out: ?*TensorView,
         ) callconv(.c) Status {
-            const model = constModel(storage) orelse return .invalid_model_storage;
+            const runtime = constRuntime(storage) orelse return .invalid_runtime_storage;
             const destination = out orelse return .invalid_argument;
             inline for (0..graph.output_ct) |index| {
                 if (output_index == index) {
                     const tensor_id = comptime graph.outputs[index].?;
                     const info = comptime graph.tensors[tensor_id].?;
-                    const view = model.outputView(index);
+                    const view = runtime.outputView(index);
                     destination.* = .{
                         .data = @ptrCast(view.storage.ptr),
                         .storage_byte_count = view.storage.len * info.dtype.byteSize(),
@@ -239,13 +273,13 @@ pub fn Adapter(comptime Model: type) type {
         }
 
         /// Copy an output into logical row-major storage.
-        pub fn modelCopyOutput(
+        pub fn runtimeCopyOutput(
             storage: ?*const anyopaque,
             output_index: usize,
             destination: ?*anyopaque,
             destination_size: usize,
         ) callconv(.c) Status {
-            const model = constModel(storage) orelse return .invalid_model_storage;
+            const runtime = constRuntime(storage) orelse return .invalid_runtime_storage;
             const destination_ptr = destination orelse return .invalid_argument;
             inline for (0..graph.output_ct) |index| {
                 if (output_index == index) {
@@ -254,7 +288,7 @@ pub fn Adapter(comptime Model: type) type {
                     const required = comptime tensorLogicalBytes(info);
                     const element_count = comptime info.shape.elementCount();
                     if (destination_size < required) return .buffer_too_small;
-                    const output = model.outputView(index);
+                    const output = runtime.outputView(index);
                     const bytes: [*]u8 = @ptrCast(destination_ptr);
                     for (0..element_count) |logical_index| {
                         const value = output.storage[output.elementOffsetFromLinear(logical_index)];
@@ -267,24 +301,24 @@ pub fn Adapter(comptime Model: type) type {
             return .invalid_output;
         }
 
-        fn mutableModel(storage: ?*anyopaque, storage_size: usize) ?*Model {
+        fn mutableRuntime(storage: ?*anyopaque, storage_size: usize) ?*Runtime {
             const pointer = storage orelse return null;
-            if (storage_size < @sizeOf(Model)) return null;
-            if (@intFromPtr(pointer) % @alignOf(Model) != 0) return null;
+            if (storage_size < @sizeOf(Runtime)) return null;
+            if (@intFromPtr(pointer) % @alignOf(Runtime) != 0) return null;
             return @ptrCast(@alignCast(pointer));
         }
 
-        fn constModel(storage: ?*const anyopaque) ?*const Model {
+        fn constRuntime(storage: ?*const anyopaque) ?*const Runtime {
             const pointer = storage orelse return null;
-            if (@intFromPtr(pointer) % @alignOf(Model) != 0) return null;
+            if (@intFromPtr(pointer) % @alignOf(Runtime) != 0) return null;
             return @ptrCast(@alignCast(pointer));
         }
 
         fn storageStatus(storage: ?*anyopaque, storage_size: usize) Status {
             const pointer = storage orelse return .invalid_argument;
-            if (storage_size < @sizeOf(Model)) return .size_mismatch;
-            if (@intFromPtr(pointer) % @alignOf(Model) != 0) return .alignment_mismatch;
-            return .invalid_model_storage;
+            if (storage_size < @sizeOf(Runtime)) return .size_mismatch;
+            if (@intFromPtr(pointer) % @alignOf(Runtime) != 0) return .alignment_mismatch;
+            return .invalid_runtime_storage;
         }
 
         fn sourceCountValue() usize {
@@ -294,7 +328,7 @@ pub fn Adapter(comptime Model: type) type {
         }
 
         fn sourceName(comptime source_id: usize) [*:0]const u8 {
-            return Model.source_names[source_id].ptr;
+            return Executable.source_names[source_id].ptr;
         }
 
         fn tensorDescriptor(comptime info: @TypeOf(graph).TensorInfo) TensorDescriptor {

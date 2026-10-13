@@ -36,7 +36,10 @@ class SliceIteration:
 
     def __init__(self, offsets: Sequence[int], boundary: SliceBoundary) -> None:
         normalized = tuple(offsets)
-        if any(not isinstance(offset, int) or isinstance(offset, bool) for offset in normalized):
+        if any(
+            not isinstance(offset, int) or isinstance(offset, bool)
+            for offset in normalized
+        ):
             raise TypeError("slice iteration offsets must be integers")
         if not isinstance(boundary, (Boundary, Redirect)):
             raise TypeError("invalid slice iteration boundary")

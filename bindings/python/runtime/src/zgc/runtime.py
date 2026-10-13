@@ -10,15 +10,16 @@ from pathlib import Path
 from typing import Literal, Protocol, Self, cast, final
 
 from ._abi import (
-    ABI_VERSION,
     Library,
     SourceBinding,
     SourceDescriptor,
     SourceKind,
     TensorDescriptor,
-    dtype as dtype_enum,
     load_library,
     require_ok,
+)
+from ._abi import (
+    dtype as dtype_enum,
 )
 
 
@@ -244,31 +245,30 @@ def _aligned_storage(
     alignment: int,
 ) -> tuple[ctypes.Array[ctypes.c_ubyte], ctypes.c_void_p]:
     if alignment <= 0 or alignment & (alignment - 1):
-        raise RuntimeError(f"invalid model alignment: {alignment}")
+        raise RuntimeError(f"invalid runtime alignment: {alignment}")
     allocation = (ctypes.c_ubyte * (size + alignment - 1))()
     address = (ctypes.addressof(allocation) + alignment - 1) & -alignment
     return allocation, ctypes.c_void_p(address)
 
 
 @final
-class Model:
+class Runtime:
     def __init__(self, path: str | PathLike[str]) -> None:
         self._library: Library = load_library(str(Path(path).expanduser().resolve()))
-        version = self._library.zgc_abi_version()
-        if version != ABI_VERSION:
-            raise RuntimeError(f"unsupported ZGC ABI version {version}")
-
-        self.model_size: int = self._library.zgc_model_size()
-        self.model_alignment: int = self._library.zgc_model_alignment()
-        self.mutable_bytes: int = self._library.zgc_model_mutable_bytes()
-        self._allocation, self._model = _aligned_storage(
-            self.model_size, self.model_alignment
+        self.structural_fingerprint: int = (
+            self._library.zgc_executable_structural_fingerprint()
+        )
+        self.runtime_size: int = self._library.zgc_runtime_size()
+        self.runtime_alignment: int = self._library.zgc_runtime_alignment()
+        self.mutable_bytes: int = self._library.zgc_runtime_mutable_bytes()
+        self._allocation, self._runtime = _aligned_storage(
+            self.runtime_size, self.runtime_alignment
         )
         self._closed = False
         self._bound_storage: dict[int, object] = {}
         require_ok(
-            self._library.zgc_model_init(self._model, self.model_size),
-            "zgc_model_init",
+            self._library.zgc_runtime_init(self._runtime, self.runtime_size),
+            "zgc_runtime_init",
         )
         self.sources = self._read_sources()
         self.outputs = self._read_outputs()
@@ -276,13 +276,13 @@ class Model:
 
     def _read_sources(self) -> tuple[Source, ...]:
         sources: list[Source] = []
-        for index in range(self._library.zgc_source_count()):
+        for index in range(self._library.zgc_executable_source_count()):
             descriptor = SourceDescriptor()
             require_ok(
-                self._library.zgc_get_source_descriptor(
+                self._library.zgc_executable_get_source_descriptor(
                     index, ctypes.byref(descriptor)
                 ),
-                "zgc_get_source_descriptor",
+                "zgc_executable_get_source_descriptor",
             )
             fields = cast(_SourceDescriptorFields, cast(object, descriptor))
             sources.append(
@@ -298,13 +298,13 @@ class Model:
 
     def _read_outputs(self) -> tuple[TensorInfo, ...]:
         outputs: list[TensorInfo] = []
-        for index in range(self._library.zgc_output_count()):
+        for index in range(self._library.zgc_executable_output_count()):
             descriptor = TensorDescriptor()
             require_ok(
-                self._library.zgc_get_output_descriptor(
+                self._library.zgc_executable_get_output_descriptor(
                     index, ctypes.byref(descriptor)
                 ),
-                "zgc_get_output_descriptor",
+                "zgc_executable_get_output_descriptor",
             )
             outputs.append(_tensor_info(descriptor))
         return tuple(outputs)
@@ -314,19 +314,19 @@ class Model:
         name: str,
         values: object,
     ) -> None:
-        """Copy logical source values into storage owned by the model.
+        """Copy logical source values into storage owned by the runtime.
 
         ``values`` may implement the Python buffer protocol or be an iterable
         of scalar values. For a compiled bound source, the values are packed
         into retained internal storage. Later changes to ``values`` therefore
-        cannot affect the model. Use :meth:`bind` to explicitly share caller
+        cannot affect the runtime. Use :meth:`bind` to explicitly share caller
         storage without copying.
         """
         self._require_open()
         try:
             source = self._sources_by_name[name]
         except KeyError as error:
-            raise KeyError(f"unknown model source {name!r}") from error
+            raise KeyError(f"unknown runtime source {name!r}") from error
         if source.binding is SourceBinding.EMBEDDED:
             raise ValueError(f"source {name!r} is embedded and cannot be replaced")
 
@@ -342,13 +342,13 @@ class Model:
                 raise ValueError("cannot bind empty source storage")
             anchor, pointer = address
             require_ok(
-                self._library.zgc_model_bind_source(
-                    self._model,
+                self._library.zgc_runtime_bind_source(
+                    self._runtime,
                     source.key,
                     pointer,
                     len(storage),
                 ),
-                "zgc_model_bind_source",
+                "zgc_runtime_bind_source",
             )
             self._bound_storage[source.key] = (storage, storage_view, anchor)
             return
@@ -365,13 +365,13 @@ class Model:
             byte_count = len(payload)
             keepalive = payload
         require_ok(
-            self._library.zgc_model_copy_source(
-                self._model,
+            self._library.zgc_runtime_copy_source(
+                self._runtime,
                 source.key,
                 pointer,
                 byte_count,
             ),
-            "zgc_model_copy_source",
+            "zgc_runtime_copy_source",
         )
         _ = keepalive
 
@@ -379,14 +379,14 @@ class Model:
         """Bind caller-owned physical storage without copying.
 
         ``values`` must export a writable, contiguous buffer whose metadata exactly match the
-        compiled bound source. The model retains the buffer until the source
-        is rebound or the model is closed.
+        compiled bound source. The runtime retains the buffer until the source
+        is rebound or the runtime is closed.
         """
         self._require_open()
         try:
             source = self._sources_by_name[name]
         except KeyError as error:
-            raise KeyError(f"unknown model source {name!r}") from error
+            raise KeyError(f"unknown runtime source {name!r}") from error
         if source.binding is not SourceBinding.BOUND:
             raise ValueError(f"source {name!r} is not a bound source")
 
@@ -400,13 +400,13 @@ class Model:
             raise ValueError("zero-copy binding requires a writable contiguous buffer")
         anchor, pointer = address
         require_ok(
-            self._library.zgc_model_bind_source(
-                self._model,
+            self._library.zgc_runtime_bind_source(
+                self._runtime,
                 source.key,
                 pointer,
                 view.nbytes,
             ),
-            "zgc_model_bind_source",
+            "zgc_runtime_bind_source",
         )
         self._bound_storage[source.key] = (values, view, anchor)
 
@@ -414,27 +414,18 @@ class Model:
         self._require_open()
         for name, values in sources.items():
             self.set_source(name, values)
-        require_ok(self._library.zgc_model_run(self._model), "zgc_model_run")
+        require_ok(self._library.zgc_runtime_run(self._runtime), "zgc_runtime_run")
         return tuple(self.output(index) for index in range(len(self.outputs)))
 
-
-    def __call__(
-        self,
-        **sources: object,
-    ) -> Tensor | tuple[Tensor, ...]:
-        """Call the model with it's sources to run and recieve an output"""
-        outputs = self.run(**sources)
-        return outputs[0] if len(outputs) == 1 else outputs
-
     def output(self, index: int) -> Tensor:
-        """Copied output from the model."""
+        """Copied output from the runtime."""
         self._require_open()
         if index < 0:
-            raise IndexError(f"model has no output {index}")
+            raise IndexError(f"runtime has no output {index}")
         try:
             info = self.outputs[index]
         except IndexError as error:
-            raise IndexError(f"model has no output {index}") from error
+            raise IndexError(f"runtime has no output {index}") from error
         storage = bytearray(info.byte_count)
         view = memoryview(storage)
         address = _writable_pointer(view)
@@ -442,13 +433,13 @@ class Model:
             raise ValueError("cannot create empty output storage")
         anchor, pointer = address
         require_ok(
-            self._library.zgc_model_copy_output(
-                self._model,
+            self._library.zgc_runtime_copy_output(
+                self._runtime,
                 index,
                 pointer,
                 info.byte_count,
             ),
-            "zgc_model_copy_output",
+            "zgc_runtime_copy_output",
         )
         _ = anchor
         return Tensor(info.dtype, info.shape, storage)
@@ -456,13 +447,13 @@ class Model:
     def close(self) -> None:
         if self._closed:
             return
-        self._library.zgc_model_deinit(self._model)
+        self._library.zgc_runtime_deinit(self._runtime)
         self._bound_storage.clear()
         self._closed = True
 
     def _require_open(self) -> None:
         if self._closed:
-            raise RuntimeError("model is closed")
+            raise RuntimeError("runtime is closed")
 
     def __enter__(self) -> Self:
         self._require_open()
@@ -476,6 +467,6 @@ class Model:
             self.close()
 
 
-def load(path: str | PathLike[str]) -> Model:
-    """Load a pre-compiled model from a local path."""
-    return Model(path)
+def load(path: str | PathLike[str]) -> Runtime:
+    """Load a pre-compiled runtime from a local path."""
+    return Runtime(path)

@@ -7,7 +7,7 @@ class ToolchainError(CompilerError):
 
 
 class CompilationError(CompilerError):
-    """Zig failed to produce a model artifact."""
+    """Zig failed to produce an executable artifact."""
 
     def __init__(
         self,
@@ -21,12 +21,3 @@ class CompilationError(CompilerError):
         self.command = command
         self.stdout = stdout
         self.stderr = stderr
-
-
-class GraphParseError(CompilerError):
-    """A serialized graph does not conform to the ZGC graph language."""
-
-    def __init__(self, message: str, *, line: int, column: int) -> None:
-        super().__init__(f"{line}:{column}: {message}")
-        self.line = line
-        self.column = column

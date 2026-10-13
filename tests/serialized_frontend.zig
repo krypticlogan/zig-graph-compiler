@@ -13,8 +13,11 @@ test "serialized frontend instantiates a definition" {
         \\outputs = [%3]
         \\
     ;
-    const Model = zgc.frontend.modelFromZgir(source);
-    try std.testing.expectEqual(@as(usize, 2), Model.source_names.len);
-    try std.testing.expectEqualStrings("x", Model.source_names[0]);
-    try std.testing.expectEqualStrings("bias", Model.source_names[1]);
+    const Executable = zgc.frontend.executableFromZgir(source);
+    const Memory = zgc.frontend.executableFromZgirWithOptions(source, .{ .target = .memory });
+    try std.testing.expectEqual(@as(usize, 2), Executable.source_names.len);
+    try std.testing.expectEqualStrings("x", Executable.source_names[0]);
+    try std.testing.expectEqualStrings("bias", Executable.source_names[1]);
+    try std.testing.expectEqual(.memory, Memory.selection_options.target);
+    try std.testing.expectEqual(.bound, Memory.source_plan.source_bindings[0]);
 }
