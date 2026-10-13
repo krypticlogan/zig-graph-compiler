@@ -1,15 +1,14 @@
 # Zig Graph Compiler
 
-ZGC is an **allocation-free ahead-of-time tensor computation graph compiler** written in Zig.
+ZGC is an **ahead-of-time tensor graph compiler** written in Zig generates statically planned, allocation-free runtimes.
 
-And, it uses Zig's `comptime` as a native compilation engine.
-
-A graph architecture is defined,
+Using Zig's `comptime`,
+a graph architecture is defined,
 lowered and optimized to a fixed execution graph,
 assigned an inline memory plan,
 and emitted as a specialized type all before the real program ever executes.
 
-The binary is the model.  
+Compiled executables are validated and contain specialized execution logic directly, eliminating runtime graph interpretation.
 Graph traversal, tensor ranks, shapes, dtypes, layouts,
 and kernel selection are compile-time-known.
 
@@ -30,12 +29,11 @@ Specialized for:
 - High visibility and control
 - Cross-compilation (thanks Zig)
 - Entirely static execution
-- No runtime graph interpretation or dispatch
+- No runtime graph interpretation or graph-level operation dispatch
 
 ZGC provides a common static graph representation for these workloads; passing optimization off to the compiler instead of handwriting these pipelines.
 
-Compiler generated executable paths currently approach handwritten implementations. See [benchmarks](benchmarks/) for reference.
-
+In selected benchmarks, ZGC-generated executables perform close to equivalent handwritten Zig implementations. Performance varies with graph structure, selected execution plan, and hardware.
 Examples exist in the [examples](examples/) directory.  
 Check them out and build locally if you prefer to see it in action.
 
@@ -104,54 +102,76 @@ const definition = blk: {
     break :blk builder.finish();
 };
 
-const MyModel = definition.model(); // graph is constructed and lowered to a specialized Zig type
+const MyExecutable = definition.executable(); // graph is lowered to a specialized Zig type
 
 pub fn main() !void {
-    var model = MyModel.init();
+    var runtime = MyExecutable.Runtime.init();
 
     const input_values: [4 * 8]f32 = @splat(1);
     const weight_values: [8 * 16]f32 = @splat(0.25);
-    try model.copyInput(.input, &input_values);
-    try model.copySource(.weights, &weight_values);
-    model.run();
+    try runtime.copyInput(.input, &input_values);
+    try runtime.copySource(.weights, &weight_values);
+    runtime.run();
 
-    const output = model.outputView(0);
+    const output = runtime.outputView(0);
     std.debug.print("shape={any} data={any}\n", .{ output.shape, output.storage });
 }
 ```
 
 ## Executable selection
 
-`modelWithOptions` chooses from the compiler's retained executable frontier at
+`executableWith` chooses from the compiler's retained executable frontier at
 compile time. The default target is `balanced`:
 
 ```zig
-const FastModel = definition.modelWithOptions(.{ .target = .fast });
-const MemoryModel = definition.modelWithOptions(.{ .target = .memory });
-const SmallModel = definition.modelWithOptions(.{ .target = .small });
-const ForcedModel = definition.modelWithOptions(.{ .frontier_index = 0 });
+const FastExecutable = definition.executableWith(.{ .target = .fast });
+const MemoryExecutable = definition.executableWith(.{ .target = .memory });
+const SmallExecutable = definition.executableWith(.{ .target = .small });
+const ForcedExecutable = definition.executableWith(.{ .frontier_index = 0 });
 ```
 
-`fast` minimizes estimated runtime work, `memory` minimizes planned peak model
-buffer space, and `small` minimizes estimated generated-code units. `balanced`
-combines runtime, peak memory, and code-size ratios with a 3:1:1 weighting.
+`fast` minimizes estimated runtime work  
+`memory` minimizes planned peak model buffer space  
+`small` minimizes estimated generated-code units  
+`balanced` combines runtime, peak memory, and code-size ratios with a 3:1:1 weighting
+
 These are compile-time estimates; `small` does not measure the linked binary.
 An explicit `frontier_index` overrides the target and fails compilation if the
 index is outside the retained frontier. Inspect
-`Model.executable_candidate_frontier` and
-`Model.selected_executable_candidate_index` to choose an index. The frontier
+`Executable.executable_candidate_frontier` and
+`Executable.selected_executable_candidate_index` to choose an index. The frontier
 retains distinct implementations for explicit selection, including some that
 lose on every current cost metric, and holds at most 16 candidates. Source
 bindings can be supplied in the same options value with `.sources = &.{...}`.
 
-## Key capabilities
+## CLI and beyond Zig
+
+ZGC provides tooling for compilation, inspection, and runtimes outside of Zig.
+
+The CLI provides:
+
+| Instruction                              | Description                                                                            |
+| ---------------------------------------- | -------------------------------------------------------------------------------------- |
+| `compile <.zgir or graph.zig> <options>` | Compile graph definitions to a target artifact.                                        |
+| `cache <options>`                        | Inspect configured cache path or clear it.                                             |
+| `inspect <executable-library> <options>` | Inspect artifacts (artifact provided must be compiled using the `--inspectable` flag). |
+
+Python bindings exist for both executable building (`zgc-compiler`) and runtimes (`zgc-runtime`).
+Separate Python libraries are maintained, but the compiler module depends on the runtime module.  
+Use `zgc-compiler` to build graphs in Python, just as you would in Zig. Use `zgc-runtime` to load and execute them.
+A C ABI is provided for runtime loading of executables in languages besides Zig.
+
+ZGIR (.zgir) is ZGC's serialized graph representation, allowing external frontends to compile graphs through the same backend as native Zig definitions. Read more about it here ([ZGIR](docs/zgir.md))
+Other languages can integrate with ZGC by translating their graph definitions into `ZGIR` and compiling those representations through the CLI.
+
+## Features
 
 - Front-facing `DefinitionBuilder` with enum-indexed sources composes graphs.
 - Fluent expressions chain operations from `builder.expr(value)`.
 - Arbitrary composite expression functions can be applied with typed arguments for reusable graph-level operations.
-- `definition.model()` constructs, validates, and lowers
-  the definition to a complete type and runtime.
-- Reusable, lifetime-planned model memory.
+- `definition.executable()` constructs, validates, and lowers
+  the definition to a complete executable type with a runtime.
+- Reusable, lifetime-planned runtime memory.
 - Multiple graph inputs, parameters, constants, and outputs.
 - Source-free scalar literals and zero-stride filled tensors.
 - `f32`, `f16`, `i8`, and strict boolean tensor dtypes.
@@ -163,13 +183,14 @@ bindings can be supplied in the same options value with `.sources = &.{...}`.
 - SIMD fast paths for contiguous kernels and generic strided traversal.
 - Graph-level fusion and traversal planning across compatible operations.
 - Compile-time layout and execution-plan selection.
-- Search-based compilation pipeline, and influencable concrete executables.
+- Search-based compilation pipeline, and explicit control over executable selection.
 - Retained executable plans that can be selected for lowering at compile-time.
 - Core-backed extensions and abstractions like `nn` and `img`.
 - Operation and generated-model benchmarks, plus standalone example packages.
 - Lean binaries and first-class inspection for any compiled tensor graph.
 - C ABI for using pre-compiled models external to Zig.
 - Reusable Python bindings that dynamically load any compatible model artifact.
+- CLI tooling for graph compilation, executable inspection, and cache management.
 
 See [development state](docs/development-state.md) for precise limitations and
 [architecture](docs/architecture.md) for the compilation pipeline.
@@ -204,16 +225,16 @@ and `zgc.ext.img.input` declares a core graph input with that convention.
 
 ### Source storage
 
-Sources use model-owned storage by default. Runtime inputs can be copied into
+Sources use runtime-owned storage by default. Runtime inputs can be copied into
 that storage with `copyInput`, while owned parameters and constants use the
 typed `copySource` API shown above.
 
 Parameters and constants may instead be embedded directly into the program:
 
 ```zig
-const EmbeddedModel = definition.modelWith(&.{
+const EmbeddedExecutable = definition.executableWith(.{ .sources = &.{
     .{ .source = .weights, .binding = zgc.memory.Source.embed(@embedFile("weights.bin")) },
-});
+} });
 ```
 
 The required byte length is derived from the source tensor's compile-time dtype
@@ -223,33 +244,33 @@ and shape and checked during compilation.
 row-major, native-endian tensor data and packs it at compile time when lowering
 selects another physical layout.
 
-`Source.embedPacked` accepts bytes already in the layout reported by `Model.sourceLayout`.
+`Source.embedPacked` accepts bytes already in the layout reported by `Executable.Runtime.sourceLayout`.
 
-Embedded values remain read-only and do not receive a region in the model's
+Embedded values remain read-only and do not receive a region in the runtime's
 mutable memory plan.
 
 Inputs can also borrow caller-owned runtime storage without a copy:
 
 ```zig
-const BorrowingModel = definition.modelWith(&.{
+const BorrowingExecutable = definition.executableWith(.{ .sources = &.{
     .{ .source = .input, .binding = zgc.memory.Source.bound },
     .{ .source = .weights, .binding = zgc.memory.Source.embed(@embedFile("weights.bin")) },
-});
+} });
 
-var model = BorrowingModel.init();
-try model.bindInput(.input, runtime_values);
-model.run();
+var runtime = BorrowingExecutable.Runtime.init();
+try runtime.bindInput(.input, runtime_values);
+runtime.run();
 ```
 
 The bound slice must:
 
-- use the physical order reported by `BorrowingModel.sourceLayout(.input)`
+- use the physical order reported by `BorrowingExecutable.Runtime.sourceLayout(.input)`
 - remain alive and unchanged while `run()` is executing.
 
 It may be updated or rebound between runs. `copyInput` accepts logical
 row-major values and packs them when lowering selects another layout.
 
-Unspecified sources use model-owned storage, so `definition.model()` is
+Unspecified sources use runtime-owned storage, so `definition.executable()` is
 equivalent to an all-owned source plan.
 
 ## Contributing
@@ -294,7 +315,7 @@ and recorded results.
 | `src/zgc/operations/` | Semantic operation definitions and reusable operation-family descriptors                           |
 | `src/zgc/kernels/`    | Elementwise, reduction, contraction, layout, and special kernels                                   |
 | `src/zgc/storage/`    | Dtypes, source policies, and memory planning                                                       |
-| `src/cli/`            | Model-specific command-line entry points                                                           |
+| `src/cli/`            | Executable-specific command-line entry points                                                      |
 | `src/artifact/`       | Generated-model artifact entry points                                                              |
 | `src/extensions/`     | Optional domain abstractions exported through `zgc.ext.nn` and `zgc.ext.img`                       |
 | `bindings/`           | Reusable host-language bindings for generated model artifacts                                      |
@@ -309,8 +330,8 @@ and recorded results.
 - [Documentation index](docs/README.md)
 - [Architecture and compilation pipeline](docs/architecture.md)
 - [Design constraints](docs/design-constraints.md)
-- [Model inspection](docs/inspection.md)
-- [Generated model artifacts](docs/model-artifacts.md)
+- [Executable inspection](docs/inspection.md)
+- [Generated model artifacts](docs/executables.md)
 - [Development state](docs/development-state.md)
 - [MNIST digit classifier](examples/mnist-digit-classifier/README.md)
 - [Conway's Game of Life](examples/conways-game-of-life/README.md)

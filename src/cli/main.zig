@@ -31,17 +31,17 @@ pub fn main(init: std.process.Init) !void {
         };
         return;
     }
-    if (!std.mem.eql(u8, args[1], "compile")) {
-        try stderr.print("unknown command: {s}\n\n", .{args[1]});
-        try usage(stderr);
-        try stderr.flush();
-        std.process.exit(2);
+    if (std.mem.eql(u8, args[1], "compile")) {
+        compile(init, args[2..], stderr) catch |err| {
+            try stderr.print("zgc compile failed: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
     }
-    compile(init, args[2..], stderr) catch |err| {
-        try stderr.print("zgc compile failed: {s}\n", .{@errorName(err)});
-        try stderr.flush();
-        std.process.exit(1);
-    };
+    try stderr.print("unknown command: {s}\n\n", .{args[1]});
+    try usage(stderr);
+    try stderr.flush();
+    std.process.exit(2);
 }
 
 fn cachePath(init: std.process.Init, configured: ?[]const u8) ![]const u8 {
@@ -131,6 +131,8 @@ fn inspectSection(name: []const u8) ?u32 {
 
 const DefinitionImport = struct { name: []const u8, path: []const u8 };
 
+/// Uses zig build-lib to compile a .zgir or Zig definition into a native shared library. 
+/// The output path is printed to stdout.
 fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !void {
     const allocator = init.arena.allocator();
     var input: ?[]const u8 = null;
