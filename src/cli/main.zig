@@ -296,6 +296,17 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
     const output_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{absolute_output});
     var command: std.ArrayList([]const u8) = .empty;
     try command.appendSlice(allocator, &.{ zig, "build-lib", "-dynamic", optimize_arg });
+    const linux_target = if (target) |triple|
+        std.mem.indexOf(u8, triple, "-linux") != null
+    else
+        builtin.os.tag == .linux;
+    if (linux_target) {
+        try command.append(allocator, try std.fmt.allocPrint(
+            allocator,
+            "-fsoname={s}",
+            .{std.fs.path.basename(absolute_output)},
+        ));
+    }
     if (target) |value| {
         try command.appendSlice(allocator, &.{ "-target", value });
     }
