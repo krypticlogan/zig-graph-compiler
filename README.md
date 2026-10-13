@@ -295,10 +295,10 @@ Run the complete suite in `ReleaseFast`:
 zig build benchmark -Doptimize=ReleaseFast
 ```
 
-Select an individual case with `-Dop`, for example:
+Select an individual case with `-Dbenchmark`, for example:
 
 ```sh
-zig build benchmark -Dop=matmul-rhs-strided -Doptimize=ReleaseFast
+zig build benchmark -Dbenchmark=<workload> -Doptimize=ReleaseFast
 ```
 
 See the [benchmark dashboard](benchmarks/README.md) for selectors, methodology,
