@@ -1,6 +1,6 @@
 # Zig Graph Compiler
 
-ZGC is an **ahead-of-time tensor graph compiler** written in Zig generates statically planned, allocation-free runtimes.
+ZGC is an **ahead-of-time tensor graph compiler** written in Zig that generates statically planned, allocation-free runtimes.
 
 Using Zig's `comptime`,
 a graph architecture is defined,
@@ -52,7 +52,7 @@ https://github.com/user-attachments/assets/1c3cbe07-377e-42a5-aab2-9fd6ec340f38
 In a Zig project directory:
 
 ```bash
-zig fetch --save git+https://github.com/krypticlogan/zgc
+zig fetch --save git+https://github.com/krypticlogan/zig-graph-compiler
 ```
 
 Add to your build.zig and add the ZGC module as an import to your own:
