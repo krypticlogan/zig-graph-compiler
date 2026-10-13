@@ -159,6 +159,10 @@ The CLI provides:
 Python bindings exist for both executable building (`zgc-compiler`) and runtimes (`zgc-runtime`).
 Separate Python libraries are maintained, but the compiler module depends on the runtime module.  
 Use `zgc-compiler` to build graphs in Python, just as you would in Zig. Use `zgc-runtime` to load and execute them.
+Use pip to install either Python package:
+```pip install zgc-runtime``` -- install just the runtime, for pre-compiled binaries
+```pip install zgc-compiler``` -- installs both the runtime and compilation mechanisms
+
 A C ABI is provided for runtime loading of executables in languages besides Zig.
 
 ZGIR (.zgir) is ZGC's serialized graph representation, allowing external frontends to compile graphs through the same backend as native Zig definitions. Read more about it here ([ZGIR](docs/zgir.md))
