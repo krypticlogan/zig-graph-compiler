@@ -148,6 +148,8 @@ bindings can be supplied in the same options value with `.sources = &.{...}`.
 
 ZGC provides tooling for compilation, inspection, and runtimes outside of Zig.
 
+To install the CLI, first run `zig build -Doptimize=ReleaseFast` from the project root. This will install the CLI executable titled `zgc` to zig-out.
+Finally, add the directory containing `zgc` to your system PATH and invoke the CLI with `zgc`.
 The CLI provides:
 
 | Instruction                              | Description                                                                            |
