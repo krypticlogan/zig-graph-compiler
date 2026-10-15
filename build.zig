@@ -18,7 +18,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/cli/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "build_options", .module = cli_options.createModule() }},
+            .imports = &.{
+                .{ .name = "build_options", .module = cli_options.createModule() },
+                .{ .name = "zgc", .module = zgc_mod },
+            },
         }),
     });
     b.installArtifact(cli);
@@ -103,9 +106,83 @@ pub fn build(b: *std.Build) void {
     else
         "zgc_runtime_run");
 
-    const check_step = b.step("check", "Compile tests without running them");
-    check_step.dependOn(&tests.step);
-    check_step.dependOn(&runner_test_exe.step);
+    const check_zgc = b.step("check-zgc", "Compile the public ZGC module");
+    const zgc_object = b.addObject(.{ .name = "zgc-check", .root_module = zgc_mod });
+    check_zgc.dependOn(&zgc_object.step);
+
+    const check_inspect_cli = b.step("check-inspect-cli", "Compile the inspection CLI module");
+    const inspect_check_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/inspect.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "executable", .module = runner_test_executable },
+        },
+    });
+    const inspect_check_exe = b.addExecutable(.{ .name = "zgc-inspect-check", .root_module = inspect_check_mod });
+    check_inspect_cli.dependOn(&inspect_check_exe.step);
+
+    const check_runner = b.step("check-executable-runner", "Compile the executable runner module");
+    check_runner.dependOn(&runner_test_exe.step);
+
+    const check_abi = b.step("check-executable-abi", "Compile the executable ABI module");
+    const abi_check_mod = b.createModule(.{
+        .root_source_file = b.path("src/artifact/executable_abi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "executable", .module = runner_test_executable },
+        },
+    });
+    const abi_check_object = b.addObject(.{ .name = "zgc-abi-check", .root_module = abi_check_mod });
+    check_abi.dependOn(&abi_check_object.step);
+
+    const check_inspectable_abi = b.step("check-inspectable-executable-abi", "Compile the inspectable ABI module");
+    const inspectable_abi_check_mod = b.createModule(.{
+        .root_source_file = b.path("src/artifact/inspectable_executable_abi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "executable", .module = runner_test_executable },
+        },
+    });
+    const inspectable_abi_check_object = b.addObject(.{ .name = "zgc-inspectable-abi-check", .root_module = inspectable_abi_check_mod });
+    check_inspectable_abi.dependOn(&inspectable_abi_check_object.step);
+
+    const check_zgir_executable = b.step("check-zgir-executable", "Compile the serialized-graph executable module");
+    const check_graph = b.addOptions();
+    check_graph.addOption([]const u8, "source", @embedFile("bindings/tests/fixtures/smoke.zgir"));
+    const zgir_check_mod = b.createModule(.{
+        .root_source_file = b.path("src/artifact/zgir_executable.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "graph", .module = check_graph.createModule() },
+        },
+    });
+    const zgir_check_object = b.addObject(.{ .name = "zgc-zgir-check", .root_module = zgir_check_mod });
+    check_zgir_executable.dependOn(&zgir_check_object.step);
+
+    const check_cli_step = b.step("check-cli", "Compile the CLI without installing it");
+    check_cli_step.dependOn(&cli.step);
+
+    const check_tests_step = b.step("check-tests", "Compile tests without running them");
+    check_tests_step.dependOn(&tests.step);
+    check_tests_step.dependOn(&runner_test_exe.step);
+
+    const check_step = b.step("check", "Compile library modules, CLI, and tests without running them");
+    check_step.dependOn(check_cli_step);
+    check_step.dependOn(check_tests_step);
+    check_step.dependOn(check_zgc);
+    check_step.dependOn(check_inspect_cli);
+    check_step.dependOn(check_runner);
+    check_step.dependOn(check_abi);
+    check_step.dependOn(check_inspectable_abi);
+    check_step.dependOn(check_zgir_executable);
 
     const run_mod_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run tests");
@@ -117,7 +194,7 @@ pub fn build(b: *std.Build) void {
         "python",
         "Python interpreter for bindings tests",
     ) orelse "python3";
-    
+
     const bindings_smoke = b.addSystemCommand(
         &.{ python, "bindings/tests/smoke.py" },
     );
@@ -198,4 +275,32 @@ pub fn build(b: *std.Build) void {
     const run_benchmark = b.addRunArtifact(benchmark_exe);
     const benchmark_step = b.step("benchmark", "Run the graph selected by -Dbenchmark");
     benchmark_step.dependOn(&run_benchmark.step);
+
+    const check_workloads = b.step("check-workloads", "Compile every benchmark workload without running it");
+    inline for (.{ "contraction", "reduction", "fusion", "dense", "lbm", "conway" }) |name| {
+        const workload = b.createModule(.{
+            .root_source_file = b.path("benchmarks/workloads/" ++ name ++ ".zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zgc", .module = zgc_mod },
+                .{ .name = "benchmark_selection", .module = benchmark_selection },
+            },
+        });
+        const workload_exe = b.addExecutable(.{
+            .name = "zgc-benchmark-check-" ++ name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("benchmarks/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zgc", .module = zgc_mod },
+                    .{ .name = "build_options", .module = benchmark_options_module },
+                    .{ .name = "benchmark_case", .module = workload },
+                },
+            }),
+        });
+        check_workloads.dependOn(&workload_exe.step);
+    }
+    check_step.dependOn(check_workloads);
 }
