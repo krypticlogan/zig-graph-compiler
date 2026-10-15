@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const timing = @import("time.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
@@ -34,6 +35,14 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, args[1], "compile")) {
         compile(init, args[2..], stderr) catch |err| {
             try stderr.print("zgc compile failed: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        return;
+    }
+    if (std.mem.eql(u8, args[1], "time")) {
+        timeCommand(init, args[2..], stderr) catch |err| {
+            try stderr.print("zgc time failed: {s}\n", .{@errorName(err)});
             try stderr.flush();
             std.process.exit(1);
         };
@@ -130,11 +139,81 @@ fn inspectSection(name: []const u8) ?u32 {
     return null;
 }
 
+fn timeCommand(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !void {
+    var options: timing.Options = .{};
+    var input: ?[]const u8 = null;
+    var json_path: ?[]const u8 = null;
+
+    var index: usize = 0;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (isHelp(arg)) {
+            try timeUsage(stderr);
+            return;
+        }
+        const timing_value = std.mem.eql(u8, arg, "--runs") or
+            std.mem.eql(u8, arg, "--warmup-ms") or
+            std.mem.eql(u8, arg, "--warmup-iterations") or
+            std.mem.eql(u8, arg, "--sample-ms") or
+            std.mem.eql(u8, arg, "--iterations");
+        if (std.mem.eql(u8, arg, "--out")) {
+            index += 1;
+            if (index == args.len) return error.MissingOutputPath;
+            json_path = args[index];
+            continue;
+        }
+        if (timing_value) {
+            index += 1;
+            if (index == args.len) return error.MissingOptionValue;
+            const value = args[index];
+            const number = try std.fmt.parseInt(usize, value, 10);
+            if (std.mem.eql(u8, arg, "--runs")) options.runs = number else if (std.mem.eql(u8, arg, "--warmup-ms")) options.warmup_ms = number else if (std.mem.eql(u8, arg, "--warmup-iterations")) options.warmup_iterations = number else if (std.mem.eql(u8, arg, "--sample-ms")) options.sample_ms = number else options.iterations = number;
+        } else if (arg.len != 0 and arg[0] == '-') {
+            return error.InvalidTimeOption;
+        } else if (input == null) {
+            input = arg;
+        } else {
+            return error.MultipleInputs;
+        }
+    }
+
+    const source = input orelse {
+        try timeUsage(stderr);
+        return error.MissingInput;
+    };
+    if (std.mem.eql(u8, std.fs.path.extension(source), ".zgir")) return error.ExpectedExecutableLibrary;
+    if (options.runs == 0 or (options.iterations == 0 and options.sample_ms == 0)) return error.InvalidTimingConfiguration;
+    try timing.run(init, source, options, build_options.abi_version, json_path);
+}
+
 const DefinitionImport = struct { name: []const u8, path: []const u8 };
 
-/// Uses zig build-lib to compile a .zgir or Zig definition into a native shared library. 
-/// The output path is printed to stdout.
 fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !void {
+    const allocator = init.arena.allocator();
+    var filtered: std.ArrayList([]const u8) = .empty;
+    var show_time = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--time")) {
+            show_time = true;
+        } else {
+            try filtered.append(allocator, arg);
+        }
+    }
+    const start = std.Io.Clock.awake.now(init.io).nanoseconds;
+    const output = try compileArtifact(init, filtered.items, stderr) orelse return;
+    const elapsed = std.Io.Clock.awake.now(init.io).nanoseconds - start;
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+    try stdout_writer.interface.print("{s}\n", .{output});
+    try stdout_writer.interface.flush();
+    if (show_time) {
+        try stderr.print("compilation: {d:.3} s\n", .{@as(f64, @floatFromInt(elapsed)) / std.time.ns_per_s});
+        try stderr.flush();
+    }
+}
+
+/// Uses zig build-lib to compile a .zgir or Zig definition into a native shared library.
+fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !?[]const u8 {
     const allocator = init.arena.allocator();
     var input: ?[]const u8 = null;
     var output: ?[]const u8 = null;
@@ -155,7 +234,7 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
         const arg = args[index];
         if (isHelp(arg)) {
             try compileUsage(stderr);
-            return;
+            return null;
         } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
             index += 1;
             if (index == args.len) return error.MissingOutputPath;
@@ -339,10 +418,7 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
         else => return error.CompilerFailed,
     }
 
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
-    try stdout_writer.interface.print("{s}\n", .{absolute_output});
-    try stdout_writer.interface.flush();
+    return absolute_output;
 }
 
 fn defaultOutput(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
@@ -390,6 +466,7 @@ fn usage(writer: *std.Io.Writer) !void {
         \\commands:
         \\  compile    specialize a .zgir or Zig definition and emit a native shared library
         \\  inspect    show metadata and graph representations from a shared library
+        \\  time       measure a compiled executable runtime
         \\  cache      show or clear the native compiler cache
         \\
         \\run 'zgc <command> --help' for command options
@@ -430,6 +507,25 @@ fn compileUsage(writer: *std.Io.Writer) !void {
         \\  --inspectable            embed inspection data and export zgc_executable_inspect
         \\  --name <name>            cached artifact filename stem
         \\  --import <name=path>     Zig module import (repeatable for .zig definitions)
+        \\  --time                   report total compilation time after success
+        \\
+    );
+}
+
+fn timeUsage(writer: *std.Io.Writer) !void {
+    try writer.writeAll(
+        \\usage: zgc time <executable-library> [options]
+        \\
+        \\timing options:
+        \\  --runs <n>                 timed samples (default: 30)
+        \\  --warmup-ms <n>            warmup duration (default: 2000)
+        \\  --warmup-iterations <n>    fixed warmup iterations instead
+        \\  --sample-ms <n>            target duration per sample (default: 250)
+        \\  --iterations <n>           fixed iterations per sample instead
+        \\  --out <path>               append a timing record to a JSON array
+        \\
+        \\Sources are initialized to zero. Setup is excluded from runtime samples.
+        \\Compile .zgir files first with 'zgc compile'; use its --time flag to time compilation.
         \\
     );
 }

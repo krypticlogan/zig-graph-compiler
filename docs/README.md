@@ -24,5 +24,4 @@ runtime storage, supported operations, constraints, and tooling.
   analysis.
 - [Conway's Game of Life](../examples/conways-game-of-life/README.md) — static
   window geometry, externally managed state, and interactive rendering.
-- [Benchmarks](../benchmarks/README.md) — cases, methodology, and recorded
-  results.
+- [Benchmarks](../benchmarks/README.md) — reference workloads and timing notes.

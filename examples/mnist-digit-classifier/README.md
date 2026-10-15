@@ -108,14 +108,3 @@ lifecycle, C header, source policies, and build integration.
 The digit classifier composes its three dense stages with `zgc.ext.nn.Dense`
 and `zgc.ext.nn.Sequential`. Its output-major parameter files are selected
 through each layer's `.weight_layout = .output_input` setting.
-
-## Benchmarks
-
-Run the benchmark suite from the repository root:
-
-```sh
-zig build benchmark -Doptimize=ReleaseFast
-```
-
-See [benchmarks/README.md](../../benchmarks/README.md) for individual selectors,
-methodology, and recorded results.

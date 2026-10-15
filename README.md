@@ -154,21 +154,22 @@ The CLI provides:
 
 | Instruction                              | Description                                                                            |
 | ---------------------------------------- | -------------------------------------------------------------------------------------- |
-| `compile <.zgir or graph.zig> <options>` | Compile graph definitions to a target artifact.                                        |
-| `cache <options>`                        | Inspect configured cache path or clear it.                                             |
+| `compile <.zgir or graph.zig> <options>` | Compile graph definitions to a target artifact. Options for output and compilation.    |
+| `time <executable-library> <options>`    | Time a compiled & lowered runtime. Options to configure timing and output.             |
 | `inspect <executable-library> <options>` | Inspect artifacts (artifact provided must be compiled using the `--inspectable` flag). |
+| `cache <options>`                        | Inspect configured cache path or clear it.                                             |
 
 Python bindings exist for both executable building (`zgc-compiler`) and runtimes (`zgc-runtime`).
-Separate Python libraries are maintained, but the compiler module depends on the runtime module.  
-Use `zgc-compiler` to build graphs in Python, just as you would in Zig. Use `zgc-runtime` to load and execute them.
-Use pip to install either Python package:
-```pip install zgc-runtime``` -- install just the runtime, for pre-compiled binaries
-```pip install zgc-compiler``` -- installs both the runtime and compilation mechanisms
+Separate Python libraries are maintained, but the compiler module depends on the runtime module.    
+Use `zgc-compiler` to build graphs in Python, just as you would in Zig. Use `zgc-runtime` to load and execute them.  
+Use pip to install either Python package:  
+`pip install zgc-runtime` -- install just the runtime, for pre-compiled binaries  
+`pip install zgc-compiler` -- installs both the runtime and compilation mechanisms  
 
-A C ABI is provided for runtime loading of executables in languages besides Zig.
+A C ABI is provided for runtime loading of executables in languages besides Zig.  
 
-ZGIR (.zgir) is ZGC's serialized graph representation, allowing external frontends to compile graphs through the same backend as native Zig definitions. Read more about it here ([ZGIR](docs/zgir.md))
-Other languages can integrate with ZGC by translating their graph definitions into `ZGIR` and compiling those representations through the CLI.
+ZGIR (.zgir) is ZGC's serialized graph representation, allowing external frontends to compile graphs through the same backend as native Zig definitions. Read more about it here ([ZGIR](docs/zgir.md)).  
+Other languages can integrate with ZGC by translating their graph definitions into ZGIR and compiling those representations through the CLI.
 
 ## Features
 
@@ -295,20 +296,28 @@ New operations or graph-level intermediates should be tested and verified.
 
 ### Benchmarks
 
-Run the complete suite in `ReleaseFast`:
+The library provides benchmarks at 2 levels.
+
+As a part of the ZGC build system the benchmark step is retained as a way to track ZGC implementations versus handwritten equivalents.
+Additionally, it serves as the timing and performance check for compiler-level regressions.
+
+To use it, run `zig build benchmark -Dbenchmark=<workload> -Doptimize=ReleaseFast` from the ZGC root.
+
+To benchmark pre-compiled executables, use the `zgc time` interface.
 
 ```sh
-zig build benchmark -Doptimize=ReleaseFast
+zgc compile graph.zgir -O ReleaseFast --time -o graph.dylib
+zgc time graph.dylib
 ```
 
-Select an individual case with `-Dbenchmark`, for example:
+Append timing records to a JSON file:
 
 ```sh
-zig build benchmark -Dbenchmark=<workload> -Doptimize=ReleaseFast
+zgc time graph.dylib --out benchmarks/results.json
 ```
 
-See the [benchmark dashboard](benchmarks/README.md) for selectors, methodology,
-and recorded results.
+See the [benchmark workloads](benchmarks/README.md) for retained reference
+graphs and timing notes.
 
 ## Repository layout
 
@@ -326,7 +335,7 @@ and recorded results.
 | `src/extensions/`     | Optional domain abstractions exported through `zgc.ext.nn` and `zgc.ext.img`                       |
 | `bindings/`           | Reusable host-language bindings for generated model artifacts                                      |
 | `tests/`              | Compile-time graph, runtime model, validation, view, and kernel coverage                           |
-| `benchmarks/`         | Operation and generated-model benchmark harness, with recorded results                             |
+| `benchmarks/`         | Reference graph workloads and direct implementations                                               |
 | `examples/`           | Standalone model definitions, interactive applications, inspection, and artifact analysis          |
 | `playground/`         | Standalone scratch package for graph construction, execution, testing, inspection, and disassembly |
 | `docs/`               | Architecture, design constraints, capabilities, and limitations                                    |

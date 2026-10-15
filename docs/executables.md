@@ -41,6 +41,24 @@ The command embeds the serialized graph, parses it at compile time, replays it
 through `DefinitionBuilder`, and exports the specialized executable through the C
 ABI. Parsing, validation, planning, and kernel selection do not occur when the
 resulting library is loaded or executed.
+Use `--time` to report the total compilation invocation after a successful build.
+The artifact path remains on stdout; timing is printed to stderr. The duration
+depends on the Zig cache state.
+
+## Time an executable
+
+`zgc time` accepts a compiled shared library and loads it directly.
+
+```sh
+zgc time path/to/graph.so --runs 30 --warmup-ms 2000 --sample-ms 250
+```
+
+The command initializes non-embedded sources with zero-filled buffers, warms
+the runtime, calibrates iterations per sample, and reports latency and
+throughput. Initialization is outside the timed samples.
+Timing includes the shared-library ABI call. Use `--iterations` and
+`--warmup-iterations` for fixed counts. `--out <path>` appends a record
+to a JSON array containing runtime timing samples and summary statistics.
 
 Build-system integrations can use the exported `zgc_zgir_executable` module. Supply
 its required `graph` import with a module exposing `pub const source`, then use

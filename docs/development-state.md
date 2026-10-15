@@ -1,7 +1,7 @@
 # Development state
 
 ZGC is functional but pre-release. The compile-time definition-to-model path,
-runtime execution, tests, examples, and operation benchmark suite are working
+runtime execution, tests, examples, and executable timing are working
 on Zig 0.17.0. The API should still be expected to change.
 
 ## Implementation roadmap
@@ -11,7 +11,7 @@ on Zig 0.17.0. The API should still be expected to change.
    representation alternatives are introduced.
 2. Define first-class composite operations from primitives for LayerNorm,
    activation functions, and domain extensions.
-3. Add cost and decision inspection to benchmarks
+3. Add cost and decision inspection to executable timing
 4. Introduce composite operations as a first-class concern.
 4. Expand numerical validation and differential testing
 5. Add dtype conversion and settle the tensor-index dtype.
@@ -122,7 +122,7 @@ on Zig 0.17.0. The API should still be expected to change.
 
 - Unit and end-to-end tests through `zig build test`.
 - Compile-only check through `zig build check`.
-- Maintained root benchmark suite with shape and layout comparisons.
+- Reference graph workloads and executable timing through `zgc time`.
 - Reusable model-specific inspection CLI and generated-model runner modules.
 - Standalone example packages with interactive applications and model artifact
   tooling.
