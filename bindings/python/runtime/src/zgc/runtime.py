@@ -409,12 +409,20 @@ class Runtime:
             "zgc_runtime_bind_source",
         )
         self._bound_storage[source.key] = (values, view, anchor)
-
+    def bindOutput(self, index: int, memory):
+        pass
+    def execute(self):
+        self._require_open()
+        require_ok(
+            self._library.zgc_runtime_run(self._runtime),
+            "zgc_runtime_run"
+        )
+        
     def run(self, **sources: object) -> tuple[Tensor, ...]:
         self._require_open()
         for name, values in sources.items():
             self.set_source(name, values)
-        require_ok(self._library.zgc_runtime_run(self._runtime), "zgc_runtime_run")
+        self.execute()
         return tuple(self.output(index) for index in range(len(self.outputs)))
 
     def output(self, index: int) -> Tensor:

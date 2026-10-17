@@ -308,6 +308,10 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     cache_directory.close(init.io);
     const absolute_input = try std.fs.path.resolve(allocator, &.{ cwd, input_path });
     const absolute_root = try std.fs.path.resolve(allocator, &.{ cwd, source_root });
+    const target_os = if (target) |triple|
+        (try std.Target.Query.parse(.{ .arch_os_abi = triple })).os_tag orelse builtin.os.tag
+    else
+        builtin.os.tag;
     const output_path = if (cached_output) blk: {
         var digest: [32]u8 = undefined;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -328,9 +332,9 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         }
         hasher.final(&digest);
         const hex = std.fmt.bytesToHex(digest, .lower);
-        const filename = try defaultOutput(allocator, requested_name orelse input_path);
+        const filename = try defaultOutput(allocator, requested_name orelse input_path, target_os);
         break :blk try std.fs.path.join(allocator, &.{ cache_root, "executables", &hex, filename });
-    } else output orelse try defaultOutput(allocator, requested_name orelse input_path);
+    } else output orelse try defaultOutput(allocator, requested_name orelse input_path, target_os);
     const absolute_output = try std.fs.path.resolve(allocator, &.{ cwd, output_path });
     if (cached_output) {
         var output_directory = try std.Io.Dir.createDirPathOpen(.cwd(), init.io, std.fs.path.dirname(absolute_output).?, .{});
@@ -375,11 +379,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     const output_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{absolute_output});
     var command: std.ArrayList([]const u8) = .empty;
     try command.appendSlice(allocator, &.{ zig, "build-lib", "-dynamic", optimize_arg });
-    const linux_target = if (target) |triple|
-        std.mem.indexOf(u8, triple, "-linux") != null
-    else
-        builtin.os.tag == .linux;
-    if (linux_target) {
+    if (target_os == .linux) {
         try command.append(allocator, try std.fmt.allocPrint(
             allocator,
             "-fsoname={s}",
@@ -421,11 +421,11 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     return absolute_output;
 }
 
-fn defaultOutput(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+fn defaultOutput(allocator: std.mem.Allocator, input: []const u8, target_os: std.Target.Os.Tag) ![]const u8 {
     const basename = std.fs.path.basename(input);
     const extension = std.fs.path.extension(basename);
     const stem = basename[0 .. basename.len - extension.len];
-    const suffix = switch (builtin.os.tag) {
+    const suffix = switch (target_os) {
         .windows => ".dll",
         .macos, .ios, .tvos, .watchos, .visionos => ".dylib",
         else => ".so",

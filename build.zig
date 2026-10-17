@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/cli/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = target.result.os.tag == .linux,
             .imports = &.{
                 .{ .name = "build_options", .module = cli_options.createModule() },
                 .{ .name = "zgc", .module = zgc_mod },
