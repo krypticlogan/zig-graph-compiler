@@ -280,6 +280,23 @@ row-major values and packs them when lowering selects another layout.
 Unspecified sources use runtime-owned storage, so `definition.executable()` is
 equivalent to an all-owned source plan.
 
+Outputs can borrow caller-owned writable storage as a group:
+
+```zig
+const Executable = definition.executableWith(.{
+    .outputs = zgc.memory.Output.bound,
+});
+var runtime = Executable.Runtime.init();
+try runtime.bindOutput(0, output_values);
+runtime.run();
+```
+
+Every output must be bound before `run()` in this mode. Input binding is
+independent. Bound output buffers use the compiled physical layout reported by
+`Executable.Runtime.outputLayout(index)` and may be rebound between runs.
+Outputs must have distinct computed storage roots; use `copy` or `contiguous`
+to materialize an aliasing output first.
+
 ## Contributing
 
 ### Build and test

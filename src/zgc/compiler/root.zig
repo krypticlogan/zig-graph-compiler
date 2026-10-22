@@ -5,12 +5,14 @@ const SemanticOptimization = @import("semantic_optimization.zig");
 const validation = @import("validation.zig");
 const Executable = @import("../core/executable.zig").Executable;
 const Source = @import("../storage/source.zig");
+const Output = @import("../storage/output.zig");
 
 /// Compile a completed definition into an executable.
 pub fn executable(
     comptime Definition: type,
     comptime definition: Definition,
     comptime source_configuration: anytype,
+    comptime output_binding: Output.Binding,
     comptime selection: Search.SelectionOptions,
 ) type {
     const compile_work = 40_000 + definition.node_count *
@@ -46,6 +48,7 @@ pub fn executable(
         remap_candidates,
         contraction_candidates,
         source_configuration,
+        output_binding,
     );
     const selected_candidate = executable_search.selected(selection);
     const program = selected_candidate.executable;
@@ -59,6 +62,7 @@ pub fn executable(
         graph,
         source_configuration,
     );
+    const OutputPlan = Output.Plan(graph, output_binding);
     return Executable(
         Definition.Source,
         capacity,
@@ -71,6 +75,7 @@ pub fn executable(
         FinalValidated,
         lifetime_analysis,
         SourcePlan,
+        OutputPlan,
         &definition.source_names,
     );
 }

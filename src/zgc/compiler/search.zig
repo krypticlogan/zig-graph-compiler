@@ -3,6 +3,7 @@ const Execution = @import("../execution/execution.zig");
 const ProgramFactory = @import("../execution/program.zig").Program;
 const Graph = @import("../core/graph.zig");
 const Source = @import("../storage/source.zig");
+const Output = @import("../storage/output.zig");
 const Storage = @import("../storage/storage.zig");
 const Tensor = @import("../core/tensor.zig");
 const Elementwise = @import("../operations/elementwise.zig");
@@ -512,6 +513,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             comptime remap_candidates: RemapCandidates,
             comptime contraction_candidates: Analysis.ContractionCandidates(capacity),
             comptime source_configuration: anytype,
+            comptime output_binding: Output.Binding,
         ) Result {
             const representations = composeRepresentations(SemanticValidated.graph, fusion_candidates, layout_candidates, remap_candidates, contraction_candidates);
             var result: Result = undefined;
@@ -539,6 +541,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                         null,
                         schedule.kind,
                         source_configuration,
+                        output_binding,
                     );
                     if (schedule_index == 0) result.reference = candidate;
                     result.frontier.insert(candidate);
@@ -588,6 +591,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                         representation.remapRegime(),
                         schedule.kind,
                         source_configuration,
+                        output_binding,
                     );
                     if (result.generated_count == 0) result.reference = candidate;
                     result.frontier.insert(candidate);
@@ -983,17 +987,19 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             comptime remap_regime: ?Analysis.RemapRegime,
             comptime schedule: Scheduling.Kind,
             comptime source_configuration: anytype,
+            comptime output_binding: Output.Binding,
         ) CandidateType {
             const Validated = validation.FinalValidation(capacity).validate(executable);
             const lifetimes = LifetimeAnalysis().analyze(Validated);
             const SourcePlan = Source.Plan(SourceKey, capacity, executable, source_configuration);
-            const MemoryPlan = Storage.MemoryPlan(capacity, executable, lifetimes, SourcePlan);
+            const OutputPlan = Output.Plan(executable, output_binding);
+            const MemoryPlan = Storage.MemoryPlan(capacity, executable, lifetimes, SourcePlan, OutputPlan);
             const memory_traffic = estimateMemoryTraffic(executable);
             const arithmetic_work = estimateRuntime(executable);
             const access_work = estimateAccess(executable);
             const register_pressure_work = estimateRegisterPressure(executable);
             const transfer_work = memoryTransferWork(memory_traffic);
-            const persistent_memory_bytes = persistentBytes(executable, lifetimes, SourcePlan);
+            const persistent_memory_bytes = persistentBytes(executable, lifetimes, SourcePlan, OutputPlan);
 
             return .{
                 .executable = executable,
@@ -1683,12 +1689,12 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             return result;
         }
 
-        fn persistentBytes(comptime program: Program, comptime lifetimes: anytype, comptime SourcePlan: type) usize {
+        fn persistentBytes(comptime program: Program, comptime lifetimes: anytype, comptime SourcePlan: type, comptime OutputPlan: type) usize {
             var bytes: usize = 0;
             for (0..program.tensor_ct) |tensor_id| {
                 if (!program.materialized[tensor_id]) continue;
                 const info = program.tensors[tensor_id].?;
-                if (info.storage_tensor != tensor_id or !SourcePlan.isOwned(info)) continue;
+                if (info.storage_tensor != tensor_id or !SourcePlan.isOwned(info) or OutputPlan.isBoundRoot(tensor_id)) continue;
                 if (lifetimes.tensor_lifetimes[tensor_id].isPersistent()) {
                     bytes += info.shape.elementCount() * info.dtype.byteSize();
                 }

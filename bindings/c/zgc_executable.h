@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define ZGC_ABI_VERSION 1u
+#define ZGC_ABI_VERSION 2u
 
 typedef enum zgc_status {
     ZGC_STATUS_OK = 0,
@@ -54,6 +54,11 @@ typedef enum zgc_source_binding {
     ZGC_BINDING_BOUND = 2,
     ZGC_BINDING_EMBEDDED = 3,
 } zgc_source_binding;
+
+typedef enum zgc_output_binding {
+    ZGC_OUTPUT_OWNED = 1,
+    ZGC_OUTPUT_BOUND = 2,
+} zgc_output_binding;
 
 typedef struct zgc_tensor_descriptor {
     zgc_dtype dtype;
@@ -115,6 +120,13 @@ zgc_status zgc_runtime_bind_source(
 
 size_t zgc_executable_output_count(void);
 zgc_status zgc_executable_get_output_descriptor(size_t output_index, zgc_tensor_descriptor *out);
+zgc_status zgc_executable_get_output_binding(size_t output_index, zgc_output_binding *out);
+zgc_status zgc_runtime_bind_output(
+    void *runtime,
+    size_t output_index,
+    void *data,
+    size_t byte_count
+);
 zgc_status zgc_runtime_output_view(
     const void *runtime,
     size_t output_index,

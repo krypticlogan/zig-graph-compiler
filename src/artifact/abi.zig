@@ -1,7 +1,7 @@
 //! ABI for interaction with compiled graphs at runtime
 const std = @import("std");
 
-pub const version: u32 = 1;
+pub const version: u32 = 2;
 
 pub const Status = enum(c_int) {
     ok = 0,
@@ -36,6 +36,8 @@ pub const SourceBinding = enum(u32) {
     bound = 2,
     embedded = 3,
 };
+
+pub const OutputBinding = enum(u32) { owned = 1, bound = 2 };
 
 /// Static logical geometry and physical layout for one tensor.
 pub const TensorDescriptor = extern struct {
@@ -137,6 +139,12 @@ pub fn Adapter(comptime Executable: type) type {
                 if (comptime Executable.source_plan.source_bindings[source_id] != .bound) continue;
                 const key: SourceKey = @fromBackingInt(@intCast(source_id));
                 if (!runtime.inputIsBound(key)) return .missing_binding;
+            }
+            if (comptime Executable.output_plan.output_binding == .bound) {
+                inline for (0..graph.output_ct) |output_index| {
+                    if (!runtime.outputIsBound(output_index)) return .missing_binding;
+                }
+                if (runtime.outputBindingsOverlap()) return .invalid_argument;
             }
             runtime.run();
             return .ok;
@@ -249,6 +257,44 @@ pub fn Adapter(comptime Executable: type) type {
             return .invalid_output;
         }
 
+        pub fn outputBinding(output_index: usize, out: ?*OutputBinding) callconv(.c) Status {
+            const destination = out orelse return .invalid_argument;
+            if (output_index >= graph.output_ct) return .invalid_output;
+            destination.* = switch (Executable.output_plan.output_binding) {
+                .owned => .owned,
+                .bound => .bound,
+            };
+            return .ok;
+        }
+
+        /// Bind mutable physical output storage for direct writes by run().
+        pub fn runtimeBindOutput(
+            storage: ?*anyopaque,
+            output_index: usize,
+            data: ?*anyopaque,
+            byte_count: usize,
+        ) callconv(.c) Status {
+            const runtime = mutableRuntime(storage, @sizeOf(Runtime)) orelse return .invalid_runtime_storage;
+            const output_data = data orelse return .invalid_argument;
+            if (output_index >= graph.output_ct) return .invalid_output;
+            if (comptime Executable.output_plan.output_binding != .bound) return .incompatible_binding;
+            inline for (0..graph.output_ct) |index| {
+                if (output_index == index) {
+                    const info = comptime graph.tensors[graph.outputs[index].?].?;
+                    if (byte_count != tensorLogicalBytes(info)) return .size_mismatch;
+                    if (@intFromPtr(output_data) % info.dtype.alignment() != 0) return .alignment_mismatch;
+                    const T = info.dtype.Scalar();
+                    const raw: [*]u8 = @ptrCast(output_data);
+                    const bytes = raw[0..byte_count];
+                    const aligned: []align(@alignOf(T)) u8 = @alignCast(bytes);
+                    const values = std.mem.bytesAsSlice(T, aligned);
+                    runtime.bindOutput(index, values) catch return .size_mismatch;
+                    return .ok;
+                }
+            }
+            unreachable;
+        }
+
         pub fn runtimeOutputView(
             storage: ?*const anyopaque,
             output_index: usize,
@@ -258,6 +304,9 @@ pub fn Adapter(comptime Executable: type) type {
             const destination = out orelse return .invalid_argument;
             inline for (0..graph.output_ct) |index| {
                 if (output_index == index) {
+                    if (comptime Executable.output_plan.output_binding == .bound) {
+                        if (!runtime.outputIsBound(index)) return .missing_binding;
+                    }
                     const tensor_id = comptime graph.outputs[index].?;
                     const info = comptime graph.tensors[tensor_id].?;
                     const view = runtime.outputView(index);
@@ -283,6 +332,9 @@ pub fn Adapter(comptime Executable: type) type {
             const destination_ptr = destination orelse return .invalid_argument;
             inline for (0..graph.output_ct) |index| {
                 if (output_index == index) {
+                    if (comptime Executable.output_plan.output_binding == .bound) {
+                        if (!runtime.outputIsBound(index)) return .missing_binding;
+                    }
                     const tensor_id = comptime graph.outputs[index].?;
                     const info = comptime graph.tensors[tensor_id].?;
                     const required = comptime tensorLogicalBytes(info);

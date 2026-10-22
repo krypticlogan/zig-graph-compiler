@@ -112,6 +112,10 @@ class Compiler:
             command.extend(("--name", _artifact_name(name)))
         if self.config.inspectable:
             command.append("--inspectable")
+        if self.config.bind_outputs:
+            if definition_path.suffix != ".zgir":
+                raise CompilerError("bound output selection requires a .zgir graph")
+            command.append("--bind-outputs")
         if self.config.zgc_root is not None:
             command.extend(
                 ("--zgc-root", str(Path(self.config.zgc_root).expanduser().resolve()))
@@ -198,6 +202,7 @@ class Compiler:
             "selection_target": self.config.selection_target,
             "frontier_index": self.config.frontier_index,
             "inspectable": self.config.inspectable,
+            "bind_outputs": self.config.bind_outputs,
             "native": str(native),
             "native_stamp": self._file_stamp(native),
             "zig": str(zig.executable),

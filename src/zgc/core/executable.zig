@@ -83,13 +83,15 @@ pub fn Executable(
     comptime Validated: type,
     comptime lifetimes: anytype,
     comptime SourcePlan: type,
+    comptime OutputPlan: type,
     comptime source_name_table: []const [:0]const u8,
 ) type {
     const graph = Validated.graph;
-    const plan = Storage.MemoryPlan(capacities, graph, lifetimes, SourcePlan);
+    const plan = Storage.MemoryPlan(capacities, graph, lifetimes, SourcePlan, OutputPlan);
     return struct {
         pub const SourceKeyType = SourceKey;
         pub const SourceError = error{SourceSizeMismatch};
+        pub const OutputError = error{OutputSizeMismatch};
         pub const program = graph;
         pub const structural_fingerprint = @import("../compiler/analysis/fingerprint.zig").executable(graph);
         pub const memory_plan = plan;
@@ -113,6 +115,7 @@ pub fn Executable(
         pub const selected_executable_candidate = executable_search.selected(selection);
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;
+        pub const output_plan = OutputPlan;
         pub const source_names = source_name_table;
 
         pub const Runtime = struct {
@@ -121,15 +124,23 @@ pub fn Executable(
 
             memory: [plan.byte_count]u8 align(plan.alignment) = undefined,
             bound_sources: [capacities.max_sources]?[]const u8 = @splat(null),
+            bound_outputs: [graph.output_ct]?[]u8 = @splat(null),
 
             pub fn init() Self {
                 return .{
                     .memory = @splat(0),
                     .bound_sources = @splat(null),
+                    .bound_outputs = @splat(null),
                 };
             }
 
             pub fn run(exe: *Self) void {
+                if (comptime OutputPlan.output_binding == .bound) {
+                    inline for (0..graph.output_ct) |output_index| {
+                        if (exe.bound_outputs[output_index] == null) @panic("runtime output has not been bound");
+                    }
+                    if (exe.outputBindingsOverlap()) @panic("bound output buffers overlap another active binding");
+                }
                 @setEvalBranchQuota(10_000 + graph.node_ct * 2_048);
                 inline for (0..graph.node_ct) |node_id| {
                     exe.executeNode(node_id);
@@ -145,6 +156,49 @@ pub fn Executable(
             } {
                 const tensor_id = graph.outputs[output_index].?;
                 return runtime.constTensorView(tensor_id);
+            }
+
+            /// Borrow caller-owned physical storage for one output. All outputs
+            /// must be bound before run() when executable outputs are bound.
+            pub fn bindOutput(
+                runtime: *Self,
+                comptime output_index: usize,
+                values: []outputScalar(output_index),
+            ) OutputError!void {
+                if (comptime OutputPlan.output_binding != .bound) {
+                    @compileError("bindOutput requires executableWith(.{ .outputs = zgc.memory.Output.bound })");
+                }
+                const info = comptime outputInfo(output_index);
+                if (values.len != info.shape.elementCount()) return error.OutputSizeMismatch;
+                runtime.bound_outputs[output_index] = std.mem.sliceAsBytes(values);
+            }
+
+            pub fn outputIsBound(runtime: *const Self, comptime output_index: usize) bool {
+                if (comptime OutputPlan.output_binding != .bound) {
+                    @compileError("outputIsBound requires bound executable outputs");
+                }
+                _ = comptime outputInfo(output_index);
+                return runtime.bound_outputs[output_index] != null;
+            }
+
+            pub fn outputBindingsOverlap(runtime: *const Self) bool {
+                if (comptime OutputPlan.output_binding != .bound) return false;
+                for (runtime.bound_outputs, 0..) |maybe_output, output_index| {
+                    const output = maybe_output orelse continue;
+                    for (runtime.bound_sources) |maybe_source| {
+                        const source = maybe_source orelse continue;
+                        if (slicesOverlap(output, source)) return true;
+                    }
+                    for (runtime.bound_outputs[0..output_index]) |maybe_previous| {
+                        const previous = maybe_previous orelse continue;
+                        if (slicesOverlap(output, previous)) return true;
+                    }
+                }
+                return false;
+            }
+
+            pub fn outputLayout(comptime output_index: usize) Tensor.Layout(capacities.max_rank) {
+                return outputInfo(output_index).layout;
             }
 
             /// Copy logical row-major values into a runtime-owned source. Lowering
@@ -280,6 +334,9 @@ pub fn Executable(
             }
 
             fn tensorBytes(runtime: *Self, comptime tensor_id: Tensor.Id) []u8 {
+                if (comptime OutputPlan.outputForRoot(tensor_id)) |output_index| {
+                    return runtime.bound_outputs[output_index] orelse @panic("runtime output has not been bound");
+                }
                 const region = plan.tensor_regions[tensor_id] orelse
                     @compileError("tensor does not have runtime-owned mutable storage");
                 return runtime.memory[region.offset .. region.offset + region.len_bytes];
@@ -291,6 +348,10 @@ pub fn Executable(
                 comptime T: type,
             ) []align(@alignOf(T)) const u8 {
                 const info = graph.tensors[tensor_id].?;
+                if (comptime OutputPlan.outputForRoot(tensor_id)) |output_index| {
+                    const bytes = runtime.bound_outputs[output_index] orelse @panic("runtime output has not been bound");
+                    return @alignCast(bytes);
+                }
                 return switch (comptime SourcePlan.bindingForTensor(info)) {
                     .owned => blk: {
                         const region = plan.tensor_regions[tensor_id].?;
@@ -333,6 +394,25 @@ pub fn Executable(
                     @compileError("the graph does not contain the provided source key");
                 }
                 return source_id;
+            }
+
+            fn outputInfo(comptime output_index: usize) @TypeOf(graph).TensorInfo {
+                if (output_index >= graph.output_ct) @compileError("output index is outside the graph's outputs");
+                return graph.tensors[graph.outputs[output_index].?].?;
+            }
+
+            fn outputScalar(comptime output_index: usize) type {
+                return outputInfo(output_index).dtype.Scalar();
+            }
+
+            fn slicesOverlap(lhs: []const u8, rhs: []const u8) bool {
+                if (lhs.len == 0 or rhs.len == 0) return false;
+                const lhs_start = @intFromPtr(lhs.ptr);
+                const rhs_start = @intFromPtr(rhs.ptr);
+                return if (lhs_start <= rhs_start)
+                    rhs_start - lhs_start < lhs.len
+                else
+                    lhs_start - rhs_start < rhs.len;
             }
 
             fn sourceFor(comptime source_key: SourceKey) Tensor.Source {

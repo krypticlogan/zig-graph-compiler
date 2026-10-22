@@ -23,6 +23,8 @@ comptime {
     @export(&Api.runtimeBindSource, .{ .name = "zgc_runtime_bind_source" });
     @export(&Api.outputCount, .{ .name = "zgc_executable_output_count" });
     @export(&Api.outputDescriptor, .{ .name = "zgc_executable_get_output_descriptor" });
+    @export(&Api.outputBinding, .{ .name = "zgc_executable_get_output_binding" });
+    @export(&Api.runtimeBindOutput, .{ .name = "zgc_runtime_bind_output" });
     @export(&Api.runtimeOutputView, .{ .name = "zgc_runtime_output_view" });
     @export(&Api.runtimeCopyOutput, .{ .name = "zgc_runtime_copy_output" });
 }
@@ -45,6 +47,8 @@ pub fn retain() void {
         &Api.runtimeBindSource,
         &Api.outputCount,
         &Api.outputDescriptor,
+        &Api.outputBinding,
+        &Api.runtimeBindOutput,
         &Api.runtimeOutputView,
         &Api.runtimeCopyOutput,
     }) |function| {

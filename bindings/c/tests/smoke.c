@@ -18,6 +18,9 @@ int main(void) {
   CHECK(zgc_abi_version() == ZGC_ABI_VERSION);
   CHECK(zgc_executable_source_count() == 2);
   CHECK(zgc_executable_output_count() == 1);
+  zgc_output_binding output_binding;
+  CHECK(zgc_executable_get_output_binding(0, &output_binding) == ZGC_STATUS_OK);
+  CHECK(output_binding == ZGC_OUTPUT_OWNED);
 
   zgc_source_descriptor input_source;
   zgc_source_descriptor bias_source;

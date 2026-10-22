@@ -173,6 +173,7 @@ pub fn MemoryPlan(
     comptime g: anytype,
     comptime lifetime_analysis: anytype,
     comptime SourcePlan: type,
+    comptime OutputPlan: type,
 ) type {
     _ = capacities;
     var memory_plan: [g.tensor_ct]?StorageRegion = @splat(null);
@@ -189,7 +190,7 @@ pub fn MemoryPlan(
         }
         const tensor_info = g.tensors[tensor_id].?;
         if (tensor_info.storage_tensor != tensor_id) continue;
-        if (!SourcePlan.isOwned(tensor_info)) continue;
+        if (!SourcePlan.isOwned(tensor_info) or OutputPlan.isBoundRoot(tensor_id)) continue;
         switch (tensor_info.origin) {
             .source => {},
             .node, .literal => continue,
@@ -219,7 +220,7 @@ pub fn MemoryPlan(
             }
             const tensor_info = g.tensors[tensor_id].?;
             if (tensor_info.storage_tensor != tensor_id) continue;
-            if (!SourcePlan.isOwned(tensor_info)) continue;
+            if (!SourcePlan.isOwned(tensor_info) or OutputPlan.isBoundRoot(tensor_id)) continue;
             switch (tensor_info.origin) {
                 .node => {},
                 .source, .literal => continue,

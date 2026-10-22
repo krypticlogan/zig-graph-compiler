@@ -155,6 +155,7 @@ pub fn writeMemoryPlan(comptime Executable: type, writer: *Writer) Writer.Error!
     const graph = Executable.program;
     const plan = Executable.memory_plan;
     const SourcePlan = Executable.source_plan;
+    const OutputPlan = Executable.output_plan;
 
     try writer.print(
         "MemoryPlan(bytes={d}, alignment={d}, tensors={d})\n",
@@ -164,10 +165,13 @@ pub fn writeMemoryPlan(comptime Executable: type, writer: *Writer) Writer.Error!
     for (plan.tensor_regions, 0..) |maybe_region, tensor_id| {
         const info = graph.tensors[tensor_id].?;
         const region = maybe_region orelse {
-            const binding = SourcePlan.bindingForTensor(graph.tensors[info.storage_tensor].?);
+            const binding = if (OutputPlan.isBoundRoot(info.storage_tensor))
+                "bound_output"
+            else
+                @tagName(SourcePlan.bindingForTensor(graph.tensors[info.storage_tensor].?));
             try writer.print(
                 "  t{d}: external storage={s} storage=t{d} dtype={s} shape=",
-                .{ tensor_id, @tagName(binding), info.storage_tensor, @tagName(info.dtype) },
+                .{ tensor_id, binding, info.storage_tensor, @tagName(info.dtype) },
             );
             try writeShape(writer, &info.shape);
             try writer.writeByte('\n');

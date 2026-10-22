@@ -11,6 +11,7 @@ from typing import Literal, Protocol, Self, cast, final
 
 from ._abi import (
     Library,
+    OutputBinding,
     SourceBinding,
     SourceDescriptor,
     SourceKind,
@@ -196,24 +197,11 @@ def _writable_pointer(
     return anchor, ctypes.c_void_p(ctypes.addressof(anchor))
 
 
-def _contiguous_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
-    strides = [0] * len(shape)
-    stride = 1
-    for axis in range(len(shape) - 1, -1, -1):
-        strides[axis] = stride
-        stride *= shape[axis]
-    return tuple(strides)
-
-
 def _physical_buffer_matches(info: TensorInfo, view: memoryview) -> bool:
     if info.offset != 0 or not view.c_contiguous:
         return False
     if view.itemsize == 1 and _native_format(view) in {"b", "B", "c"}:
-        return (
-            view.ndim == 1
-            and view.nbytes == info.byte_count
-            and info.strides == _contiguous_strides(info.shape)
-        )
+        return view.ndim == 1 and view.nbytes == info.byte_count
     expected_strides = tuple(stride * view.itemsize for stride in info.strides)
     return (
         tuple(view.shape or ()) == info.shape
@@ -266,12 +254,14 @@ class Runtime:
         )
         self._closed = False
         self._bound_storage: dict[int, object] = {}
+        self._bound_output_storage: dict[int, object] = {}
         require_ok(
             self._library.zgc_runtime_init(self._runtime, self.runtime_size),
             "zgc_runtime_init",
         )
         self.sources = self._read_sources()
         self.outputs = self._read_outputs()
+        self.output_bindings = self._read_output_bindings()
         self._sources_by_name = {source.name: source for source in self.sources}
 
     def _read_sources(self) -> tuple[Source, ...]:
@@ -308,6 +298,19 @@ class Runtime:
             )
             outputs.append(_tensor_info(descriptor))
         return tuple(outputs)
+
+    def _read_output_bindings(self) -> tuple[OutputBinding, ...]:
+        bindings: list[OutputBinding] = []
+        for index in range(len(self.outputs)):
+            binding = ctypes.c_uint32()
+            require_ok(
+                self._library.zgc_executable_get_output_binding(
+                    index, ctypes.byref(binding)
+                ),
+                "zgc_executable_get_output_binding",
+            )
+            bindings.append(OutputBinding(binding.value))
+        return tuple(bindings)
 
     def set_source(
         self,
@@ -409,8 +412,38 @@ class Runtime:
             "zgc_runtime_bind_source",
         )
         self._bound_storage[source.key] = (values, view, anchor)
-    def bindOutput(self, index: int, memory):
-        pass
+    def bind_output(self, index: int, values: object) -> None:
+        """Bind writable output storage in the executable's physical layout."""
+        self._require_open()
+        try:
+            info = self.outputs[index]
+            binding = self.output_bindings[index]
+        except IndexError as error:
+            raise IndexError(f"runtime has no output {index}") from error
+        if index < 0:
+            raise IndexError(f"runtime has no output {index}")
+        if binding is not OutputBinding.BOUND:
+            raise ValueError(f"output {index} is not configured as bound")
+        view = _buffer_view(info, values)
+        if view is None:
+            raise TypeError("bound outputs require an object exporting a buffer")
+        if not _physical_buffer_matches(info, view):
+            raise ValueError("buffer does not match the compiled output layout")
+        address = _writable_pointer(view)
+        if address is None:
+            raise ValueError("zero-copy binding requires a writable contiguous buffer")
+        anchor, pointer = address
+        require_ok(
+            self._library.zgc_runtime_bind_output(
+                self._runtime,
+                index,
+                pointer,
+                view.nbytes,
+            ),
+            "zgc_runtime_bind_output",
+        )
+        self._bound_output_storage[index] = (values, view, anchor)
+
     def execute(self):
         self._require_open()
         require_ok(
@@ -457,6 +490,7 @@ class Runtime:
             return
         self._library.zgc_runtime_deinit(self._runtime)
         self._bound_storage.clear()
+        self._bound_output_storage.clear()
         self._closed = True
 
     def _require_open(self) -> None:

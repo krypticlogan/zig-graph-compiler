@@ -38,6 +38,7 @@ pub const memory = struct {
     pub const ScalarValue = @import("zgc/storage/dtype.zig").ScalarValue;
     pub const Source = @import("zgc/storage/source.zig");
     pub const Storage = @import("zgc/storage/storage.zig");
+    pub const Output = @import("zgc/storage/output.zig");
 };
 
 pub const Op = @import("zgc/operations/semantic.zig").Op;

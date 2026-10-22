@@ -7,7 +7,7 @@ test "artifact ABI initializes, describes, executes, and copies a model" {
     const Api = zgc.artifact.ABI.Adapter(Executable);
     var storage: [@sizeOf(Executable.Runtime)]u8 align(@alignOf(Executable.Runtime)) = undefined;
 
-    try std.testing.expectEqual(@as(u32, 1), Api.abiVersion());
+    try std.testing.expectEqual(zgc.artifact.ABI.version, Api.abiVersion());
     try std.testing.expectEqual(Executable.structural_fingerprint, Api.executableStructuralFingerprint());
     try std.testing.expectEqual(@sizeOf(Executable.Runtime), Api.runtimeSize());
     try std.testing.expectEqual(@alignOf(Executable.Runtime), Api.runtimeAlignment());

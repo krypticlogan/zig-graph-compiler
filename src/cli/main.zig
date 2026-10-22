@@ -226,6 +226,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     var cache_dir: ?[]const u8 = null;
     var cached_output = false;
     var inspectable = false;
+    var bind_outputs = false;
     var requested_name: ?[]const u8 = null;
     var imports: std.ArrayList(DefinitionImport) = .empty;
 
@@ -271,6 +272,8 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
             cached_output = true;
         } else if (std.mem.eql(u8, arg, "--inspectable")) {
             inspectable = true;
+        } else if (std.mem.eql(u8, arg, "--bind-outputs")) {
+            bind_outputs = true;
         } else if (std.mem.eql(u8, arg, "--name")) {
             index += 1;
             if (index == args.len) return error.MissingArtifactName;
@@ -293,6 +296,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     const is_zgir = std.mem.eql(u8, std.fs.path.extension(input_path), ".zgir");
     if (!is_zgir and !std.mem.eql(u8, std.fs.path.extension(input_path), ".zig")) return error.ExpectedDefinition;
     if (is_zgir and imports.items.len != 0) return error.GraphDoesNotAcceptImports;
+    if (!is_zgir and bind_outputs) return error.OutputBindingRequiresZgir;
     if (!is_zgir and (!std.mem.eql(u8, selection_target, "balanced") or frontier_index != null)) return error.SelectionRequiresZgir;
     if (!validOptimize(optimize)) return error.InvalidOptimizeMode;
     if (!validSelectionTarget(selection_target)) return error.InvalidSelectionTarget;
@@ -323,6 +327,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         hasher.update(selection_target);
         hasher.update(zig);
         hasher.update(if (inspectable) "inspection:on" else "inspection:off");
+        hasher.update(if (bind_outputs) "outputs:bound" else "outputs:owned");
         if (frontier_index) |value| hasher.update(try std.fmt.allocPrint(allocator, "{d}", .{value}));
         for (imports.items) |item| {
             const path = try std.fs.path.resolve(allocator, &.{ cwd, item.path });
@@ -354,6 +359,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         hasher.update(graph);
         hasher.update(selection_target);
         hasher.update(frontier_text);
+        hasher.update(if (bind_outputs) "outputs:bound" else "outputs:owned");
         hasher.final(&digest);
         const hex = std.fmt.bytesToHex(digest, .lower);
         const work_path = try std.fs.path.join(allocator, &.{ cache_root, "graphs", &hex });
@@ -363,8 +369,8 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         try work.writeFile(init.io, .{ .sub_path = "executable.zig", .data = adapter_source });
         const configured_source_adapter = try std.fmt.allocPrint(
             allocator,
-            "{s}\npub const executable_options = .{{ .target = .{s}, .frontier_index = {s} }};\n",
-            .{ source_adapter, selection_target, frontier_text },
+            "{s}\npub const executable_options = .{{ .target = .{s}, .frontier_index = {s}, .outputs = .{s} }};\n",
+            .{ source_adapter, selection_target, frontier_text, if (bind_outputs) "bound" else "owned" },
         );
         try work.writeFile(init.io, .{ .sub_path = "graph.zig", .data = configured_source_adapter });
         definition_path = try std.fs.path.join(allocator, &.{ work_path, "executable.zig" });
@@ -505,6 +511,7 @@ fn compileUsage(writer: *std.Io.Writer) !void {
         \\  --cache-dir <path>       local Zig and graph cache (default: .zgc-cache)
         \\  --cache-output           emit under the native executable cache
         \\  --inspectable            embed inspection data and export zgc_executable_inspect
+        \\  --bind-outputs           require caller storage for every output (.zgir only)
         \\  --name <name>            cached artifact filename stem
         \\  --import <name=path>     Zig module import (repeatable for .zig definitions)
         \\  --time                   report total compilation time after success

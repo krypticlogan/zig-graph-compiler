@@ -122,6 +122,7 @@ pub fn Definition(
         };
         pub const ExecutableOptions = struct {
             sources: []const SourceOverride = &.{},
+            outputs: @import("../storage/output.zig").Binding = .owned,
             target: @import("../compiler/search.zig").OptimizationTarget = .balanced,
             /// An index in the retained executable frontier overrides target.
             frontier_index: ?usize = null,
@@ -148,6 +149,7 @@ pub fn Definition(
                 Self,
                 definition,
                 options.sources,
+                options.outputs,
                 .{ .target = options.target, .frontier_index = options.frontier_index },
             );
         }

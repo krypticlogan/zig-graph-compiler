@@ -7,7 +7,16 @@ import unittest
 from array import array
 from typing import final
 
-from zgc import Runtime, Source, SourceBinding, SourceKind, Tensor, TensorInfo, dtype
+from zgc import (
+    OutputBinding,
+    Runtime,
+    Source,
+    SourceBinding,
+    SourceKind,
+    Tensor,
+    TensorInfo,
+    dtype,
+)
 
 
 @final
@@ -15,6 +24,8 @@ class _Library:
     copied_source: bytes = b""
     bound_pointer: int = 0
     bound_size: int = 0
+    bound_output_pointer: int = 0
+    bound_output_size: int = 0
     output: bytes = struct.pack("=4f", 5.0, 6.0, 7.0, 8.0)
 
     def zgc_runtime_copy_source(
@@ -52,6 +63,17 @@ class _Library:
         )
         return 0
 
+    def zgc_runtime_bind_output(
+        self,
+        _runtime: ctypes.c_void_p,
+        _output_index: int,
+        data: ctypes.c_void_p,
+        size: int,
+    ) -> int:
+        self.bound_output_pointer = data.value or 0
+        self.bound_output_size = size
+        return 0
+
     def zgc_runtime_deinit(self, _: ctypes.c_void_p) -> None:
         pass
 
@@ -65,8 +87,10 @@ def _runtime(binding: SourceBinding) -> tuple[Runtime, _Library]:
     runtime._runtime = ctypes.c_void_p(1)
     runtime._closed = False
     runtime._bound_storage = {}
+    runtime._bound_output_storage = {}
     runtime._sources_by_name = {"input": source}
     runtime.outputs = (info,)
+    runtime.output_bindings = (OutputBinding.BOUND,)
     return runtime, library
 
 
@@ -107,6 +131,17 @@ class BufferTests(unittest.TestCase):
         self.assertEqual(output.buffer.shape, (2, 2))
         self.assertEqual(output.strides, (8, 4))
         self.assertEqual(output.tolist(), [5.0, 6.0, 7.0, 8.0])
+
+    def test_bound_output_keeps_caller_buffer(self) -> None:
+        runtime, library = _runtime(SourceBinding.OWNED)
+        values = array("f", [0.0, 0.0, 0.0, 0.0])
+        shaped = memoryview(values).cast("B").cast("f", shape=[2, 2])
+        runtime.bind_output(0, shaped)
+        self.assertEqual(library.bound_output_size, values.itemsize * len(values))
+        ctypes.cast(library.bound_output_pointer, ctypes.POINTER(ctypes.c_float))[0] = (
+            9.0
+        )
+        self.assertEqual(values[0], 9.0)
 
 
 if __name__ == "__main__":

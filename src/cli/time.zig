@@ -19,6 +19,10 @@ pub fn run(init: std.process.Init, input_path: []const u8, options: Options, exp
     const source_descriptor = library.lookup(*const fn (usize, ?*Abi.SourceDescriptor) callconv(.c) Abi.Status, "zgc_executable_get_source_descriptor") orelse return error.NotZgcExecutable;
     const copy_source = library.lookup(*const fn (?*anyopaque, u32, ?*const anyopaque, usize) callconv(.c) Abi.Status, "zgc_runtime_copy_source") orelse return error.NotZgcExecutable;
     const bind_source = library.lookup(*const fn (?*anyopaque, u32, ?*const anyopaque, usize) callconv(.c) Abi.Status, "zgc_runtime_bind_source") orelse return error.NotZgcExecutable;
+    const output_count = library.lookup(*const fn () callconv(.c) usize, "zgc_executable_output_count") orelse return error.NotZgcExecutable;
+    const output_descriptor = library.lookup(*const fn (usize, ?*Abi.TensorDescriptor) callconv(.c) Abi.Status, "zgc_executable_get_output_descriptor") orelse return error.NotZgcExecutable;
+    const output_binding = library.lookup(*const fn (usize, ?*Abi.OutputBinding) callconv(.c) Abi.Status, "zgc_executable_get_output_binding") orelse return error.NotZgcExecutable;
+    const bind_output = library.lookup(*const fn (?*anyopaque, usize, ?*anyopaque, usize) callconv(.c) Abi.Status, "zgc_runtime_bind_output") orelse return error.NotZgcExecutable;
 
     const alignment = runtime_alignment();
     if (alignment == 0 or !std.math.isPowerOfTwo(alignment)) return error.InvalidRuntimeAlignment;
@@ -44,6 +48,18 @@ pub fn run(init: std.process.Init, input_path: []const u8, options: Options, exp
             .embedded => unreachable,
         };
         if (status != .ok) return error.SourceInitializationFailed;
+    }
+    for (0..output_count()) |output_index| {
+        var binding: Abi.OutputBinding = undefined;
+        if (output_binding(output_index, &binding) != .ok) return error.OutputDescriptionFailed;
+        if (binding == .owned) continue;
+        var descriptor: Abi.TensorDescriptor = undefined;
+        if (output_descriptor(output_index, &descriptor) != .ok) return error.OutputDescriptionFailed;
+        const byte_count = descriptor.logical_byte_count;
+        const output_storage = try allocator.alloc(u8, try std.math.add(usize, byte_count, 15));
+        const output_address = std.mem.alignForward(usize, @intFromPtr(output_storage.ptr), 16);
+        const output_pointer: *anyopaque = @ptrFromInt(output_address);
+        if (bind_output(runtime, output_index, output_pointer, byte_count) != .ok) return error.OutputInitializationFailed;
     }
     if (runtime_run(runtime) != .ok) return error.RuntimeExecutionFailed;
 

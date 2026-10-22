@@ -53,6 +53,20 @@ const Executable = definition.executableWith(.{ .sources = &.{
 Unspecified policies are owned. Bound and embedded sources do not consume space
 in the model's mutable memory plan.
 
+## Output ownership
+
+`definition.executableWith(.{ .outputs = zgc.memory.Output.bound })` binds all
+outputs as one policy. Each output is written directly to caller-owned mutable
+storage supplied through `Runtime.bindOutput(index, values)` before `run()`.
+The physical layout is available through `Runtime.outputLayout(index)`. The
+buffers must remain valid during execution and must not overlap each other or
+any active bound input. They may be rebound between runs, enabling the caller
+to swap state buffers. Bound outputs receive no mutable memory-plan region.
+
+Input and output policies are independent. Bound output tensors must own
+distinct computed storage roots; materialize source-backed or aliasing outputs
+with `copy` or `contiguous` before declaring them as outputs.
+
 ## Views and execution
 
 - Operations receive read-only input views and write only to their designated

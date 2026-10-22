@@ -112,7 +112,8 @@ on Zig 0.17.0. The API should still be expected to change.
   intermediate-region reuse.
 - Compile-time memory plan shared by runtime instances.
 - Typed logical source/input packing, borrowed runtime inputs, logical or
-  prepacked embedded read-only parameters/constants, sequential graph
+  prepacked embedded read-only parameters/constants, all-or-none borrowed
+  runtime outputs, sequential graph
   execution, and typed output views.
 - Views alias their root tensor's storage without adding another allocation.
 - Writer-based capacity, graph, tree, memory-plan, and bounded model-memory

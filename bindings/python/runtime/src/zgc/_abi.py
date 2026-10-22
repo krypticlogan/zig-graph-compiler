@@ -5,7 +5,7 @@ import ctypes
 from enum import IntEnum
 from typing import Protocol, cast, final
 
-ABI_VERSION = 1
+ABI_VERSION = 2
 
 
 class Status(IntEnum):
@@ -40,6 +40,11 @@ class SourceBinding(IntEnum):
     OWNED = 1
     BOUND = 2
     EMBEDDED = 3
+
+
+class OutputBinding(IntEnum):
+    OWNED = 1
+    BOUND = 2
 
 
 @final
@@ -107,6 +112,18 @@ def configure(library: ctypes.CDLL) -> None:
         ctypes.POINTER(TensorDescriptor),
     ]
     library.zgc_executable_get_output_descriptor.restype = ctypes.c_int
+    library.zgc_executable_get_output_binding.argtypes = [
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    library.zgc_executable_get_output_binding.restype = ctypes.c_int
+    library.zgc_runtime_bind_output.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+    ]
+    library.zgc_runtime_bind_output.restype = ctypes.c_int
     library.zgc_runtime_copy_output.argtypes = [
         ctypes.c_void_p,
         ctypes.c_size_t,
@@ -143,6 +160,14 @@ class Library(Protocol):
     ) -> int: ...
     def zgc_executable_output_count(self) -> int: ...
     def zgc_executable_get_output_descriptor(self, index: int, output: object) -> int: ...
+    def zgc_executable_get_output_binding(self, index: int, output: object) -> int: ...
+    def zgc_runtime_bind_output(
+        self,
+        runtime: ctypes.c_void_p,
+        index: int,
+        data: ctypes.c_void_p,
+        size: int,
+    ) -> int: ...
     def zgc_runtime_copy_output(
         self,
         runtime: ctypes.c_void_p,

@@ -4,10 +4,12 @@ const ir = @import("serialized.zig");
 const def = @import("definition.zig");
 const Dtype = @import("../storage/dtype.zig").Dtype;
 const Source = @import("../storage/source.zig");
+const Output = @import("../storage/output.zig");
 
 pub const ZgirExecutableOptions = struct {
     target: @import("../compiler/search.zig").OptimizationTarget = .balanced,
     frontier_index: ?usize = null,
+    outputs: Output.Binding = .owned,
 };
 
 pub fn executableFromZgir(comptime text: []const u8) type {
@@ -36,7 +38,7 @@ pub fn executableFromZgirWithOptions(comptime text: []const u8, comptime options
         }
         const call = parseCall(line, node_index);
         values[node_index] = if (isSource(call.operation)) blk: {
-            const key: def.SerializedSourceKey = @enumFromInt(source_index);
+            const key: def.SerializedSourceKey = @fromBackingInt(@intCast(source_index));
             source_index += 1;
             const dtype = parseDtype(call.attr("dtype"));
             const shape = integers(call.attr("shape"), usize);
@@ -53,6 +55,7 @@ pub fn executableFromZgirWithOptions(comptime text: []const u8, comptime options
     const Definition = @TypeOf(definition);
     const bound_count = boundCount(text);
     if (bound_count == 0) return definition.executableWith(.{
+        .outputs = options.outputs,
         .target = options.target,
         .frontier_index = options.frontier_index,
     });
@@ -69,13 +72,14 @@ pub fn executableFromZgirWithOptions(comptime text: []const u8, comptime options
         node_index += 1;
         if (!isSource(call.operation)) continue;
         if (parseAtom(call.attr("binding")) == .bound) {
-            overrides[override_index] = .{ .source = @enumFromInt(source_index), .binding = Source.bound };
+            overrides[override_index] = .{ .source = @fromBackingInt(@intCast(source_index)), .binding = Source.bound };
             override_index += 1;
         }
         source_index += 1;
     }
     return definition.executableWith(.{
         .sources = &overrides,
+        .outputs = options.outputs,
         .target = options.target,
         .frontier_index = options.frontier_index,
     });

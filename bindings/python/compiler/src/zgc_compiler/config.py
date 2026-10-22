@@ -40,6 +40,7 @@ class CompilerConfig:
     selection_target: SelectionTarget = "balanced"
     frontier_index: int | None = None
     inspectable: bool = False
+    bind_outputs: bool = False
     zig_version: str = SUPPORTED_ZIG_VERSION
 
     @property

@@ -168,9 +168,18 @@ kind, binding policy, dtype, shape, and physical strides.
   operation.
 
 `zgc_runtime_run()` reports `ZGC_STATUS_MISSING_BINDING` when a required bound
-input has not been supplied.
+input or output has not been supplied.
 
 ## Outputs
+
+Executables may configure every output as bound. The host queries
+`zgc_executable_get_output_binding()` for each output and calls
+`zgc_runtime_bind_output()` with a mutable, correctly aligned physical buffer
+before running. All outputs must be bound in this mode. The buffers must stay
+valid during execution and must not overlap one another or a bound input.
+Input binding does not determine output binding. Native Zig definitions use
+`executableWith(.{ .outputs = zgc.memory.Output.bound })`; serialized graphs
+can be compiled with `zgc compile --bind-outputs`.
 
 `zgc_runtime_output_view()` returns a borrowed physical view into runtime storage.
 The descriptor's element offset and strides define logical indexing. The view
@@ -191,10 +200,10 @@ path does not rediscover shapes, layouts, or kernel choices at runtime.
 | Optional inspection | `zgc_executable_inspect` (only with `--inspectable`) |
 | Lifecycle | `zgc_runtime_init`, `zgc_runtime_deinit`, `zgc_runtime_run` |
 | Sources | `zgc_executable_source_count`, `zgc_executable_get_source_descriptor`, `zgc_runtime_copy_source`, `zgc_runtime_bind_source` |
-| Outputs | `zgc_executable_output_count`, `zgc_executable_get_output_descriptor`, `zgc_runtime_output_view`, `zgc_runtime_copy_output` |
+| Outputs | `zgc_executable_output_count`, `zgc_executable_get_output_descriptor`, `zgc_executable_get_output_binding`, `zgc_runtime_bind_output`, `zgc_runtime_output_view`, `zgc_runtime_copy_output` |
 
 Every fallible operation returns `zgc_status`. The status values and descriptor
-layouts are part of ABI version 1. The structural fingerprint is a `uint64_t`
+layouts are part of ABI version 2. The structural fingerprint is a `uint64_t`
 hash of the selected executable graph. It is not a hash of the source text or
 the library bytes, and does not identify embedded parameter values.
 When enabled, `zgc_executable_inspect` renders the selected executable's graph and memory-plan sections
@@ -229,6 +238,13 @@ always copies logical values into runtime-owned storage. `runtime.bind(name,
 buffer)` is the explicit zero-copy path; it requires an exact, writable
 physical layout and retains the buffer until it is rebound or the runtime is
 closed.
+
+For an artifact with bound outputs, call `runtime.bind_output(index, buffer)`
+for every output before `runtime.execute()` or `runtime.run(...)`. Buffers must
+match the compiled physical layout; a writable flat byte buffer of the
+reported byte count also works. The runtime keeps each buffer alive until it
+is rebound or closed. `CompilerConfig(bind_outputs=True)` selects this mode
+when compiling Python or `.zgir` graphs.
 
 Copied outputs own contiguous storage. `Tensor.buffer` exposes that storage as
 a shaped `memoryview`, while `Tensor.tolist()` and `Tensor.values` provide
