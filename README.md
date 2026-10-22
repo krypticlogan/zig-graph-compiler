@@ -17,7 +17,7 @@ The project requires Zig 0.17.0.
 ## What's it for?
 
 Any statically defined numerical pipeline. This includes, but is not limited to:
-
+ 
 - Inference on dense neural network graphs
 - Iterative mathematical solvers (physics simulations)
 - Audio analysis (digital signal processing)
@@ -335,6 +335,10 @@ zgc time graph.dylib --out benchmarks/results.json
 
 See the [benchmark workloads](benchmarks/README.md) for retained reference
 graphs and timing notes.
+
+### AI Usage
+This project is AI-assisted and LLMs have been used in this codebase to generate documentation, test implementations, and largely as a discussion and unblocking tool. Any AI-generated code is reviewed and revised before being treated as solved.  
+Any and all contributions should be human-reviewed at some level.
 
 ## Repository layout
 
