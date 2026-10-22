@@ -49,7 +49,7 @@ def main() -> None:
         )
 
         with zgc.load(library) as runtime:
-            assert zgc.ABI_VERSION == 1
+            assert zgc.ABI_VERSION == 2
             assert len(runtime.sources) == 2
             values = array("f", [-1.0, 2.0, -3.0, 4.0])
             runtime.bind("input", values)
