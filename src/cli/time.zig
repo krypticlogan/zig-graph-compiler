@@ -1,11 +1,12 @@
 const std = @import("std");
 const Abi = @import("zgc").artifact.ABI;
+const Library = @import("library.zig").Library;
 
 pub fn run(init: std.process.Init, input_path: []const u8, options: Options, expected_abi: u32, json_path: ?[]const u8) !void {
     const allocator = init.arena.allocator();
     const cwd = try std.process.currentPathAlloc(init.io, allocator);
     const path = try std.fs.path.resolve(allocator, &.{ cwd, input_path });
-    var library = try std.DynLib.open(path);
+    var library = try Library.open(allocator, path);
     defer library.close();
 
     const abi_version = library.lookup(*const fn () callconv(.c) u32, "zgc_abi_version") orelse return error.NotZgcExecutable;

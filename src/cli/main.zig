@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const timing = @import("time.zig");
+const Library = @import("library.zig").Library;
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
@@ -113,7 +114,7 @@ fn inspect(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
     const allocator = init.arena.allocator();
     const cwd = try std.process.currentPathAlloc(init.io, allocator);
     const library_path = try std.fs.path.resolve(allocator, &.{ cwd, args[0] });
-    var library = try std.DynLib.open(library_path);
+    var library = try Library.open(allocator, library_path);
     defer library.close();
     const abi_version = library.lookup(*const fn () callconv(.c) u32, "zgc_abi_version") orelse return error.NotZgcExecutable;
     if (abi_version() != build_options.abi_version) return error.IncompatibleAbiVersion;
