@@ -114,10 +114,14 @@ pub const DirectBenchmark = struct {
 fn directStep(input: *const [m * k]f32, weights: *const [k * n]f32, output: *[m * n]f32) void {
     @setRuntimeSafety(false);
     for (0..m) |row| {
-        for (0..n) |column| {
-            var accumulator: f32 = 0;
-            for (0..k) |inner| accumulator += input[row * k + inner] * weights[inner * n + column];
-            output[row * n + column] = accumulator;
+        const input_row = input[row * k ..][0..k];
+        const output_row = output[row * n ..][0..n];
+        @memset(output_row, 0);
+        for (input_row, 0..) |value, inner| {
+            const weight_row = weights[inner * n ..][0..n];
+            for (output_row, weight_row) |*result, weight| {
+                result.* += value * weight;
+            }
         }
     }
 }

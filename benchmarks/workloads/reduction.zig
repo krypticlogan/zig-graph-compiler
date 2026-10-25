@@ -131,18 +131,19 @@ pub const DirectBenchmark = struct {
 
 fn directStep(state: *DirectBenchmark) void {
     @setRuntimeSafety(false);
+    const inverse_columns: f32 = 1.0 / @as(f32, @floatFromInt(columns));
     for (0..rows) |row| {
+        const input_row = state.input[row * columns ..][0..columns];
         var sum: f32 = 0;
         var minimum = std.math.inf(f32);
         var maximum = -std.math.inf(f32);
-        for (0..columns) |column| {
-            const item = state.input[row * columns + column];
+        for (input_row) |item| {
             sum += item;
             minimum = @min(minimum, item);
             maximum = @max(maximum, item);
         }
         state.sums[row] = sum;
-        state.means[row] = sum / @as(f32, @floatFromInt(columns));
+        state.means[row] = sum * inverse_columns;
         state.minima[row] = minimum;
         state.maxima[row] = maximum;
     }

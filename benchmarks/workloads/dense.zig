@@ -151,35 +151,39 @@ pub const DirectBenchmark = struct {
 fn directStep(state: *DirectBenchmark) void {
     @setRuntimeSafety(false);
     for (0..batch_size) |batch_index| {
-        for (0..hidden_width) |column| {
-            var accumulator = state.b1[column];
-            for (0..input_width) |inner| {
-                accumulator += state.input[batch_index * input_width + inner] *
-                    state.w1[inner * hidden_width + column];
-            }
-            state.hidden[batch_index * hidden_width + column] = @max(accumulator, 0);
-        }
+        const input_row = state.input[batch_index * input_width ..][0..input_width];
+        const hidden_row = state.hidden[batch_index * hidden_width ..][0..hidden_width];
+        const output_row = state.output[batch_index * output_width ..][0..output_width];
 
-        var maximum = -std.math.inf(f32);
-        for (0..output_width) |column| {
-            var accumulator = state.b2[column];
-            for (0..hidden_width) |inner| {
-                accumulator += state.hidden[batch_index * hidden_width + inner] *
-                    state.w2[inner * output_width + column];
+        @memcpy(hidden_row, &state.b1);
+        for (input_row, 0..) |value, inner| {
+            const weight_row = state.w1[inner * hidden_width ..][0..hidden_width];
+            for (hidden_row, weight_row) |*result, weight| {
+                result.* += value * weight;
             }
-            state.output[batch_index * output_width + column] = accumulator;
-            maximum = @max(maximum, accumulator);
+        }
+        for (hidden_row) |*value| value.* = @max(value.*, 0);
+
+        @memcpy(output_row, &state.b2);
+        for (hidden_row, 0..) |value, inner| {
+            const weight_row = state.w2[inner * output_width ..][0..output_width];
+            for (output_row, weight_row) |*result, weight| {
+                result.* += value * weight;
+            }
+        }
+        var maximum = -std.math.inf(f32);
+        for (output_row) |value| {
+            maximum = @max(maximum, value);
         }
 
         var total: f32 = 0;
-        for (0..output_width) |column| {
-            const index = batch_index * output_width + column;
-            state.output[index] = @exp(state.output[index] - maximum);
-            total += state.output[index];
+        for (output_row) |*value| {
+            value.* = @exp(value.* - maximum);
+            total += value.*;
         }
-        for (0..output_width) |column| {
-            const index = batch_index * output_width + column;
-            state.output[index] /= total;
+        const inverse_total = 1.0 / total;
+        for (output_row) |*value| {
+            value.* *= inverse_total;
         }
     }
 }

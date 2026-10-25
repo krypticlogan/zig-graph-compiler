@@ -8,7 +8,7 @@ const cell_count = width * height;
 const Sources = enum(usize) { world };
 const Definition = zgc.DefinitionBuilder;
 
-const Executable = model: {
+pub const Executable = model: {
     var builder = Definition.init();
     const builder_sources = builder.sources(Sources);
     const world = builder_sources.input(.world, .bool, &.{ height, width });
@@ -114,21 +114,46 @@ fn initializeWorld(world: *[cell_count]bool) void {
 
 fn directStep(world: *const [cell_count]bool, output: *[cell_count]bool) void {
     @setRuntimeSafety(false);
-    for (0..height) |row| {
-        for (0..width) |column| {
+    for (1..height - 1) |row| {
+        const above = world[(row - 1) * width ..][0..width];
+        const current = world[row * width ..][0..width];
+        const below = world[(row + 1) * width ..][0..width];
+        const result = output[row * width ..][0..width];
+        for (1..width - 1) |column| {
             var neighbors: u8 = 0;
-            const row_start = if (row == 0) 0 else row - 1;
-            const row_end = @min(row + 1, height - 1);
-            const column_start = if (column == 0) 0 else column - 1;
-            const column_end = @min(column + 1, width - 1);
-            for (row_start..row_end + 1) |neighbor_row| {
-                for (column_start..column_end + 1) |neighbor_column| {
-                    if ((neighbor_row != row or neighbor_column != column) and
-                        world[neighbor_row * width + neighbor_column]) neighbors += 1;
-                }
-            }
-            const alive = world[row * width + column];
-            output[row * width + column] = neighbors == 3 or (alive and neighbors == 2);
+            neighbors += @intFromBool(above[column - 1]);
+            neighbors += @intFromBool(above[column]);
+            neighbors += @intFromBool(above[column + 1]);
+            neighbors += @intFromBool(current[column - 1]);
+            neighbors += @intFromBool(current[column + 1]);
+            neighbors += @intFromBool(below[column - 1]);
+            neighbors += @intFromBool(below[column]);
+            neighbors += @intFromBool(below[column + 1]);
+            result[column] = neighbors == 3 or (current[column] and neighbors == 2);
         }
     }
+    for (0..width) |column| {
+        stepBoundary(world, output, 0, column);
+        stepBoundary(world, output, height - 1, column);
+    }
+    for (1..height - 1) |row| {
+        stepBoundary(world, output, row, 0);
+        stepBoundary(world, output, row, width - 1);
+    }
+}
+
+fn stepBoundary(world: *const [cell_count]bool, output: *[cell_count]bool, row: usize, column: usize) void {
+    var neighbors: u8 = 0;
+    const row_start = if (row == 0) 0 else row - 1;
+    const row_end = @min(row + 1, height - 1);
+    const column_start = if (column == 0) 0 else column - 1;
+    const column_end = @min(column + 1, width - 1);
+    for (row_start..row_end + 1) |neighbor_row| {
+        for (column_start..column_end + 1) |neighbor_column| {
+            if ((neighbor_row != row or neighbor_column != column) and
+                world[neighbor_row * width + neighbor_column]) neighbors += 1;
+        }
+    }
+    const alive = world[row * width + column];
+    output[row * width + column] = neighbors == 3 or (alive and neighbors == 2);
 }

@@ -120,10 +120,11 @@ pub const DirectBenchmark = struct {
 fn directStep(state: *DirectBenchmark) void {
     @setRuntimeSafety(false);
     for (0..rows) |row| {
+        const lhs_row = state.lhs[row * columns ..][0..columns];
+        const rhs_row = state.rhs[row * columns ..][0..columns];
         var accumulator: f32 = 0;
-        for (0..columns) |column| {
-            const index = row * columns + column;
-            accumulator += state.lhs[index] * state.rhs[index] + state.bias[column];
+        for (lhs_row, rhs_row, &state.bias) |lhs, rhs, bias| {
+            accumulator += lhs * rhs + bias;
         }
         state.output[row] = accumulator;
     }

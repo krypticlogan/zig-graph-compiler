@@ -167,8 +167,8 @@ fn directLbmStep(
 ) void {
     @setRuntimeSafety(false);
 
-    const f = src.*;
-    var out = dst;
+    const f = src;
+    const out = dst;
 
     for (0..DirectHeight) |y| {
         for (0..DirectWidth) |x| {
