@@ -22,6 +22,8 @@ pub const Dtype = enum(u32) {
     f16 = 2,
     i8 = 3,
     boolean = 4,
+    i32 = 5,
+    u8 = 6,
 };
 
 pub const SourceKind = enum(u32) {
@@ -404,6 +406,8 @@ pub fn Adapter(comptime Executable: type) type {
                 .f32 => .f32,
                 .f16 => .f16,
                 .i8 => .i8,
+                .i32 => .i32,
+                .u8 => .u8,
                 .bool => .boolean,
             };
         }

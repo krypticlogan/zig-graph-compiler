@@ -140,6 +140,8 @@ fn scalar(comptime b: *def.DefinitionBuilder, comptime d: Dtype, comptime x: Seg
         .f32 => b.scalar(.f32, number(f32, x)),
         .f16 => b.scalar(.f16, number(f16, x)),
         .i8 => b.scalar(.i8, int(i8, x)),
+        .i32 => b.scalar(.i32, int(i32, x)),
+        .u8 => b.scalar(.u8, int(u8, x)),
         .bool => b.scalar(.bool, boolean(x)),
     };
 }
@@ -149,6 +151,8 @@ fn full(comptime b: *def.DefinitionBuilder, comptime d: Dtype, comptime s: Segme
         .f32 => b.full(.f32, &shape, number(f32, x)),
         .f16 => b.full(.f16, &shape, number(f16, x)),
         .i8 => b.full(.i8, &shape, int(i8, x)),
+        .i32 => b.full(.i32, &shape, int(i32, x)),
+        .u8 => b.full(.u8, &shape, int(u8, x)),
         .bool => b.full(.bool, &shape, boolean(x)),
     };
 }
@@ -411,6 +415,8 @@ fn parseDtype(comptime s: Segment) Dtype {
         .f32 => .f32,
         .f16 => .f16,
         .i8 => .i8,
+        .i32 => .i32,
+        .u8 => .u8,
         .bool => .bool,
         else => fatal(s.line, "invalid dtype"),
     };

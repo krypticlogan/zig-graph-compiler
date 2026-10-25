@@ -21,3 +21,25 @@ test "serialized frontend instantiates a definition" {
     try std.testing.expectEqual(.memory, Memory.selection_options.target);
     try std.testing.expectEqual(.bound, Memory.source_plan.source_bindings[0]);
 }
+
+test "u8 ZGIR executes with matching ABI dtype" {
+    const source =
+        \\zgir 1
+        \\
+        \\%0 = input(name="pixels", dtype=u8, shape=[3], binding=owned)
+        \\%1 = scalar(dtype=u8, value=5)
+        \\%2 = add(%0, %1)
+        \\
+        \\outputs = [%2]
+        \\
+    ;
+    const Executable = zgc.frontend.executableFromZgir(source);
+    const Abi = zgc.artifact.ABI.Adapter(Executable);
+    var descriptor: zgc.artifact.ABI.SourceDescriptor = undefined;
+    try std.testing.expectEqual(.ok, Abi.sourceDescriptor(0, &descriptor));
+    try std.testing.expectEqual(.u8, descriptor.tensor.dtype);
+    var runtime = Executable.Runtime.init();
+    try runtime.copyInput(@fromBackingInt(0), &[_]u8{ 0, 4, 5 });
+    runtime.run();
+    try std.testing.expectEqualSlices(u8, &.{ 5, 9, 10 }, runtime.outputView(0).contiguousSlice().?);
+}

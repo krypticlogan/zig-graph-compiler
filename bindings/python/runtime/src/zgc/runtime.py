@@ -102,13 +102,17 @@ def _tensor_info(descriptor: TensorDescriptor) -> TensorInfo:
     )
 
 
-def _format(dtype: dtype_enum) -> Literal["f", "e", "b", "?"]:
+def _format(dtype: dtype_enum) -> Literal["f", "e", "b", "i", "B", "?"]:
     if dtype is dtype_enum.f32:
         return "f"
     if dtype is dtype_enum.f16:
         return "e"
     if dtype is dtype_enum.i8:
         return "b"
+    if dtype is dtype_enum.i32:
+        return "i"
+    if dtype is dtype_enum.u8:
+        return "B"
     return "?"
 
 

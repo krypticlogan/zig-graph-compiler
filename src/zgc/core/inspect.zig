@@ -421,6 +421,8 @@ fn writeScalarValue(writer: *Writer, value: @import("../storage/dtype.zig").Scal
         .f32 => try writer.print("f32({d})", .{value.get(.f32)}),
         .f16 => try writer.print("f16({d})", .{value.get(.f16)}),
         .i8 => try writer.print("i8({d})", .{value.get(.i8)}),
+        .i32 => try writer.print("i32({d})", .{value.get(.i32)}),
+        .u8 => try writer.print("u8({d})", .{value.get(.u8)}),
         .bool => try writer.print("bool({any})", .{value.get(.bool)}),
     }
 }

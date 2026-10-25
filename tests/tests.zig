@@ -11,6 +11,7 @@ test {
     _ = @import("tensor_view.zig");
     _ = @import("tensor_ops/tests.zig");
     _ = @import("validation.zig");
+    _ = @import("dtypes.zig");
     _ = @import("artifact_abi.zig");
     _ = @import("serialized_frontend.zig");
     _ = @import("numerical_validation.zig");

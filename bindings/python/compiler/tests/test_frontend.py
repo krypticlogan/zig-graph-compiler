@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import unittest
 import hashlib
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-import zgc as runtime
 import zgc_compiler as zgc
+
+import zgc as runtime
 
 
 class GraphFrontendTests(unittest.TestCase):
@@ -66,9 +67,11 @@ outputs = [%3]
 
         with TemporaryDirectory() as directory:
             index = Path(directory) / "index.json"
-            with patch.object(compiler, "_graph_cache_index", return_value=index):
-                with patch.object(compiler, "_compile_file", side_effect=compile_file):
-                    result = compiler.compile(source)
+            with (
+                patch.object(compiler, "_graph_cache_index", return_value=index),
+                patch.object(compiler, "_compile_file", side_effect=compile_file),
+            ):
+                result = compiler.compile(source)
         self.assertEqual(seen, [(source, "executable")])
         self.assertEqual(result.structural_fingerprint, 42)
 
@@ -81,16 +84,21 @@ outputs = [%3]
             library.touch()
             index = Path(directory) / "index.json"
             index.write_text(
-                '{"library": "' + str(library) + '", "library_stamp": '
+                '{"library": "'
+                + str(library)
+                + '", "library_stamp": '
                 + str(list(compiler._file_stamp(library)))
                 + ', "structural_fingerprint": 42}',
                 encoding="utf-8",
             )
-            with patch.object(compiler, "_graph_cache_index", return_value=index):
-                with patch.object(compiler, "_compiled_fingerprint", return_value=42):
-                    with patch.object(graph, "serialize", side_effect=AssertionError):
-                        with patch.object(compiler, "_compile_file", side_effect=AssertionError):
-                            artifact = compiler.compile(graph)
+            with (
+                patch.object(compiler, "_graph_cache_index", return_value=index),
+                patch.object(compiler, "_compiled_fingerprint", return_value=42),
+                patch.object(graph, "serialize", side_effect=AssertionError),
+                patch.object(compiler, "_compile_file", side_effect=AssertionError),
+            ):
+                artifact = compiler.compile(graph)
+
         self.assertEqual(artifact.path, library.resolve())
 
     def test_inspectable_flag_is_forwarded_and_separates_cache_entries(self) -> None:
@@ -106,14 +114,22 @@ outputs = [%3]
                 compiler = zgc.Compiler(
                     zgc.CompilerConfig(cache_dir=root, inspectable=inspectable)
                 )
-                with patch.object(compiler, "toolchain", return_value=toolchain):
-                    with patch.object(compiler, "_native_cli", return_value=root / "zgc"):
-                        with patch.object(compiler, "_source_root", return_value=None):
-                            with patch.object(compiler, "_file_stamp", return_value=(0, 0)):
-                                paths.append(compiler._graph_cache_index("fingerprint", "graph"))
-                    with patch.object(compiler, "_run", return_value=str(library)) as run:
-                        with patch.object(compiler, "_compiled_fingerprint", return_value=42):
-                            compiler.compile(definition)
+                with (
+                    patch.object(compiler, "toolchain", return_value=toolchain),
+                    patch.object(compiler, "_native_cli", return_value=root / "zgc"),
+                    patch.object(compiler, "_source_root", return_value=None),
+                    patch.object(compiler, "_file_stamp", return_value=(0, 0)),
+                ):
+                    paths.append(compiler._graph_cache_index("fingerprint", "graph"))
+                    with (
+                        patch.object(
+                            compiler, "_run", return_value=str(library)
+                        ) as run,
+                        patch.object(
+                            compiler, "_compiled_fingerprint", return_value=42
+                        ),
+                    ):
+                        compiler.compile(definition)
                 command = run.call_args.args
                 self.assertEqual("--inspectable" in command, inspectable)
             self.assertNotEqual(paths[0], paths[1])

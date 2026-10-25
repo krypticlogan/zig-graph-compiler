@@ -6,23 +6,15 @@ on Zig 0.17.0. The API should still be expected to change.
 
 ## Implementation roadmap
 
-
-1. Refine executable cost estimates and local pruning as additional kernel and
-   representation alternatives are introduced.
-2. Define first-class composite operations from primitives for LayerNorm,
-   activation functions, and domain extensions.
-3. Add cost and decision inspection to executable timing
-4. Introduce composite operations as a first-class concern.
-4. Expand numerical validation and differential testing
-5. Add dtype conversion and settle the tensor-index dtype.
-6. Build argmin/argmax and runtime-indexed gather operations.
-7. Generalize matmul to broadcastable batch dimensions with compile-time
+1. Add dtype conversion and settle the tensor-index dtype.
+2. Build argmin/argmax and runtime-indexed gather operations.
+3. Generalize matmul to broadcastable batch dimensions with compile-time
    traversal plans.
-8. Build convolution, pooling, and specialized stencil lowering over static
+4. Build convolution, pooling, and specialized stencil lowering over static
    padding and window geometry.
-9. Expand algebraic simplification, add common-subexpression elimination, and
+5. Expand algebraic simplification, add common-subexpression elimination, and
    generalize store/epilogue sinking beyond remap regions.
-10. Introduce explicitly bounded runtime extents where they preserve static
+6. Introduce explicitly bounded runtime extents where they preserve static
    kernel specialization and memory planning.
 
 ## Implemented
@@ -74,7 +66,7 @@ on Zig 0.17.0. The API should still be expected to change.
 - Rank-zero through bounded-rank shapes.
 - Contiguous layouts, offsets, arbitrary strides, negative strides, transpose
   aliases, axis slices, and broadcast views.
-- `f32`, `f16`, `i8`, and `bool` dtypes. Numeric dtypes provide scalar/vector
+- `f32`, `f16`, `i8`, `i32`, `u8`, and `bool` dtypes. Numeric dtypes provide scalar/vector
   mappings and accumulation helpers; booleans remain strict predicates.
 
 ### Operations

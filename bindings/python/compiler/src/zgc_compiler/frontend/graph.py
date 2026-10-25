@@ -612,9 +612,14 @@ def _scalar(dtype: dtype_enum, value: Scalar) -> Scalar:
         raise TypeError(f"{dtype.name.lower()} scalar requires a numeric value")
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError("scalar values must be finite")
-    if dtype is dtype_enum.i8:
+    if dtype in (dtype_enum.i8, dtype_enum.i32, dtype_enum.u8):
         if not isinstance(value, int):
-            raise TypeError("i8 scalar requires an integer value")
-        if value < -128 or value > 127:
-            raise ValueError("i8 scalar must be between -128 and 127")
+            raise TypeError(f"{dtype.name} scalar requires an integer value")
+        lo, hi = {
+            dtype_enum.i8: (-128, 127),
+            dtype_enum.i32: (-2147483648, 2147483647),
+            dtype_enum.u8: (0, 255),
+        }[dtype]
+        if value < lo or value > hi:
+            raise ValueError(f"{dtype.name} scalar must be between {lo} and {hi}")
     return value

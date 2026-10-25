@@ -33,7 +33,7 @@ external storage. See [model artifacts](executables.md#sources) for the
 host-side binding contract.
 
 Literals include quoted strings, integers, finite decimal numbers, `true`,
-`false`, `null`, lists, and unquoted enum atoms. Dtypes are `f32`, `f16`, `i8`,
+`false`, `null`, lists, and unquoted enum atoms. Dtypes are `f32`, `f16`, `i8`, `i32`, `u8`,
 and `bool`. Shape and axis arguments are integer lists or integers as required
 by each operation. The Python graph frontend emits the same syntax through
 `Graph.serialize()`.

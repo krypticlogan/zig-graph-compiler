@@ -57,7 +57,7 @@ test "artifact ABI requires and accepts bound model sources" {
     const input = [_]f32{ 1, 2, 3, 4 };
     try std.testing.expectEqual(
         .ok,
-        Api.runtimeBindSource(&storage, @intFromEnum(models.ParameterSources.input), &input, @sizeOf(@TypeOf(input))),
+        Api.runtimeBindSource(&storage, @backingInt(models.ParameterSources.input), &input, @sizeOf(@TypeOf(input))),
     );
     try std.testing.expectEqual(.ok, Api.runtimeRun(&storage));
 

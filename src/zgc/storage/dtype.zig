@@ -4,11 +4,14 @@ pub const Dtype = enum {
     f32,
     f16,
     i8,
+    i32,
     bool,
+    u8,
 
     pub const Kind = enum {
         float,
         signed_integer,
+        unsigned_integer,
         boolean,
     };
 
@@ -17,7 +20,9 @@ pub const Dtype = enum {
             .f32 => f32,
             .f16 => f16,
             .i8 => i8,
+            .i32 => i32,
             .bool => bool,
+            .u8 => u8,
         };
     }
 
@@ -28,8 +33,12 @@ pub const Dtype = enum {
             .f16
         else if (T == i8)
             .i8
+        else if (T == i32)
+            .i32
         else if (T == bool)
             .bool
+        else if (T == u8)
+            .u8
         else
             @compileError("unsupported tensor scalar type: " ++ @typeName(T));
     }
@@ -37,7 +46,8 @@ pub const Dtype = enum {
     pub fn kind(dtype: Dtype) Kind {
         return switch (dtype) {
             .f32, .f16 => .float,
-            .i8 => .signed_integer,
+            .i8, .i32 => .signed_integer,
+            .u8 => .unsigned_integer,
             .bool => .boolean,
         };
     }
@@ -62,7 +72,9 @@ pub const Dtype = enum {
             .f32 => @sizeOf(f32),
             .f16 => @sizeOf(f16),
             .i8 => @sizeOf(i8),
+            .i32 => @sizeOf(i32),
             .bool => @sizeOf(bool),
+            .u8 => @sizeOf(u8),
         };
     }
 
@@ -71,7 +83,9 @@ pub const Dtype = enum {
             .f32 => @alignOf(f32),
             .f16 => @alignOf(f16),
             .i8 => @alignOf(i8),
+            .i32 => @alignOf(i32),
             .bool => @alignOf(bool),
+            .u8 => @alignOf(u8),
         };
     }
 };
@@ -87,7 +101,9 @@ pub const ScalarValue = struct {
             .f32 => .{ .data_type = .f32, .bits = @bitCast(@as(f32, value)) },
             .f16 => .{ .data_type = .f16, .bits = @as(u16, @bitCast(@as(f16, value))) },
             .i8 => .{ .data_type = .i8, .bits = @as(u8, @bitCast(@as(i8, value))) },
+            .i32 => .{ .data_type = .i32, .bits = @bitCast(@as(i32, value)) },
             .bool => .{ .data_type = .bool, .bits = @intFromBool(@as(bool, value)) },
+            .u8 => .{ .data_type = .u8, .bits = @as(u8, value) },
         };
     }
 

@@ -5,7 +5,7 @@ values. Inputs are read-only and compute operations write a distinct output.
 View operations alias an existing storage root and execute no runtime kernel.
 
 Tensor dimensions must be positive. Operations preserve their input dtype
-unless stated otherwise. Supported dtypes are `f32`, `f16`, `i8`, and `bool`.
+unless stated otherwise. Supported dtypes are `f32`, `f16`, `i8`, `i32`, `u8`, and `bool`.
 
 ## Definition API types
 
@@ -126,7 +126,7 @@ empty, and out-of-range axis sets are rejected. Reduced axes are removed by
 default or retained with extent one when `keep_dims` is true.
 
 `mean` requires a floating-point tensor. `sum`, `min`, and `max` support the
-implemented floating-point and signed-integer dtypes. Reduction geometry and
+implemented floating-point and integer dtypes. Reduction geometry and
 axis traversal are fixed in the generated kernel.
 
 `softmax` accepts a floating-point tensor and one axis. It preserves shape and

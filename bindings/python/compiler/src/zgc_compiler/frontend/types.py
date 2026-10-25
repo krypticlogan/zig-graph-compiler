@@ -41,8 +41,6 @@ class SliceIteration:
             for offset in normalized
         ):
             raise TypeError("slice iteration offsets must be integers")
-        if not isinstance(boundary, (Boundary, Redirect)):
-            raise TypeError("invalid slice iteration boundary")
         object.__setattr__(self, "offsets", normalized)
         object.__setattr__(self, "boundary", boundary)
 
@@ -50,6 +48,8 @@ class SliceIteration:
 f32 = dtype.f32
 f16 = dtype.f16
 i8 = dtype.i8
+i32 = dtype.i32
+u8 = dtype.u8
 bool_ = dtype.bool
 
 owned = SourceBinding.OWNED

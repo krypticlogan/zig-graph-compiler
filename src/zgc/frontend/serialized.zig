@@ -59,6 +59,8 @@ pub const Atom = enum {
     f32,
     f16,
     i8,
+    i32,
+    u8,
     bool,
     owned,
     bound,

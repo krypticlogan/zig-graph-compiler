@@ -27,6 +27,8 @@ class dtype(IntEnum):
     f16 = 2
     i8 = 3
     bool = 4
+    i32 = 5
+    u8 = 6
 
 
 class SourceKind(IntEnum):

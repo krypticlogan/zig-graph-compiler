@@ -540,7 +540,7 @@ pub fn SemanticOptimization(comptime capacity: Graph.Capacity) type {
 
         fn isIntegerZero(comptime graph: SemanticGraph, comptime tensor_id: Tensor.Id) bool {
             const info = graph.tensors[tensor_id].?;
-            if (info.dtype.kind() != .signed_integer) return false;
+            if (info.dtype.kind() != .signed_integer and info.dtype.kind() != .unsigned_integer) return false;
             return isNumericZero(graph, tensor_id);
         }
 
@@ -551,6 +551,8 @@ pub fn SemanticOptimization(comptime capacity: Graph.Capacity) type {
                 .f32 => info.origin.literal.bits == 0,
                 .f16 => info.origin.literal.bits == 0,
                 .i8 => info.origin.literal.get(.i8) == 0,
+                .i32 => info.origin.literal.get(.i32) == 0,
+                .u8 => info.origin.literal.get(.u8) == 0,
                 .bool => false,
             };
         }
@@ -562,6 +564,8 @@ pub fn SemanticOptimization(comptime capacity: Graph.Capacity) type {
                 .f32 => info.origin.literal.get(.f32) == 1,
                 .f16 => info.origin.literal.get(.f16) == 1,
                 .i8 => info.origin.literal.get(.i8) == 1,
+                .i32 => info.origin.literal.get(.i32) == 1,
+                .u8 => info.origin.literal.get(.u8) == 1,
                 .bool => false,
             };
         }

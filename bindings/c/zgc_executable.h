@@ -40,6 +40,8 @@ typedef enum zgc_dtype {
     ZGC_DTYPE_F16 = 2,
     ZGC_DTYPE_I8 = 3,
     ZGC_DTYPE_BOOL = 4,
+    ZGC_DTYPE_I32 = 5,
+    ZGC_DTYPE_U8 = 6,
 } zgc_dtype;
 
 typedef enum zgc_source_kind {

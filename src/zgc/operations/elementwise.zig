@@ -81,8 +81,8 @@ pub const Operation = enum {
     pub fn acceptsOperands(operation: Operation, dtypes: []const Dtype) bool {
         if (dtypes.len != operation.arity()) return false;
         return switch (operation) {
-            .relu, .neg, .abs => dtypes[0].kind() != .boolean,
-            .exp, .sqrt, .log, .reciprocal => dtypes[0].kind() == .float,
+            .relu => dtypes[0].kind() != .boolean,
+            .exp, .neg, .abs, .sqrt, .log, .reciprocal => dtypes[0].kind() == .float,
             .add, .sub, .mul, .minimum, .maximum => dtypes[0] == dtypes[1] and dtypes[0].kind() != .boolean,
             .div => dtypes[0] == dtypes[1] and dtypes[0].kind() == .float,
             .clamp => dtypes[0] == dtypes[1] and dtypes[0] == dtypes[2] and dtypes[0].kind() != .boolean,
