@@ -213,13 +213,20 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
     }
 }
 
-/// Uses zig build-lib to compile a .zgir or Zig definition into a native shared library.
+const ArtifactKind = enum {
+    shared,
+    static,
+    executable,
+};
+
+/// Compiles a .zgir or Zig definition into a native library or executable.
 fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !?[]const u8 {
     const allocator = init.arena.allocator();
     var input: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var optimize: []const u8 = "ReleaseFast";
     var target: ?[]const u8 = null;
+    var cpu: ?[]const u8 = null;
     var selection_target: []const u8 = "balanced";
     var frontier_index: ?usize = null;
     var zig: []const u8 = "zig";
@@ -229,6 +236,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     var inspectable = false;
     var bind_outputs = false;
     var requested_name: ?[]const u8 = null;
+    var artifact_kind: ArtifactKind = .shared;
     var imports: std.ArrayList(DefinitionImport) = .empty;
 
     var index: usize = 0;
@@ -249,6 +257,10 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
             index += 1;
             if (index == args.len) return error.MissingTarget;
             target = args[index];
+        } else if (std.mem.eql(u8, arg, "--cpu")) {
+            index += 1;
+            if (index == args.len) return error.MissingCpu;
+            cpu = args[index];
         } else if (std.mem.eql(u8, arg, "--selection-target")) {
             index += 1;
             if (index == args.len) return error.MissingSelectionTarget;
@@ -279,6 +291,10 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
             index += 1;
             if (index == args.len) return error.MissingArtifactName;
             requested_name = args[index];
+        } else if (std.mem.eql(u8, arg, "--artifact")) {
+            index += 1;
+            if (index == args.len) return error.MissingArtifactKind;
+            artifact_kind = std.meta.stringToEnum(ArtifactKind, args[index]) orelse return error.InvalidArtifactKind;
         } else if (std.mem.eql(u8, arg, "--import")) {
             index += 1;
             if (index == args.len) return error.MissingImport;
@@ -325,10 +341,12 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         hasher.update(absolute_root);
         hasher.update(optimize);
         hasher.update(target orelse "native");
+        hasher.update(cpu orelse "default-cpu");
         hasher.update(selection_target);
         hasher.update(zig);
         hasher.update(if (inspectable) "inspection:on" else "inspection:off");
         hasher.update(if (bind_outputs) "outputs:bound" else "outputs:owned");
+        hasher.update(@tagName(artifact_kind));
         if (frontier_index) |value| hasher.update(try std.fmt.allocPrint(allocator, "{d}", .{value}));
         for (imports.items) |item| {
             const path = try std.fs.path.resolve(allocator, &.{ cwd, item.path });
@@ -338,9 +356,9 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         }
         hasher.final(&digest);
         const hex = std.fmt.bytesToHex(digest, .lower);
-        const filename = try defaultOutput(allocator, requested_name orelse input_path, target_os);
+        const filename = try defaultOutput(allocator, requested_name orelse input_path, target_os, artifact_kind);
         break :blk try std.fs.path.join(allocator, &.{ cache_root, "executables", &hex, filename });
-    } else output orelse try defaultOutput(allocator, requested_name orelse input_path, target_os);
+    } else output orelse try defaultOutput(allocator, requested_name orelse input_path, target_os, artifact_kind);
     const absolute_output = try std.fs.path.resolve(allocator, &.{ cwd, output_path });
     if (cached_output) {
         var output_directory = try std.Io.Dir.createDirPathOpen(.cwd(), init.io, std.fs.path.dirname(absolute_output).?, .{});
@@ -377,7 +395,11 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         definition_path = try std.fs.path.join(allocator, &.{ work_path, "executable.zig" });
         graph_path = try std.fs.path.join(allocator, &.{ work_path, "graph.zig" });
     }
-    const abi_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", if (inspectable) "inspectable_executable_abi.zig" else "executable_abi.zig" });
+    const artifact_root = switch (artifact_kind) {
+        .shared, .static => if (inspectable) "inspectable_executable_abi.zig" else "executable_abi.zig",
+        .executable => if (inspectable) "inspectable_executable_runner.zig" else "executable_runner.zig",
+    };
+    const abi_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", artifact_root });
     const root_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "root.zig" });
     const optimize_arg = try std.fmt.allocPrint(allocator, "-O{s}", .{optimize});
     const root_arg = try std.fmt.allocPrint(allocator, "-Mroot={s}", .{abi_path});
@@ -385,8 +407,10 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     const zgc_arg = try std.fmt.allocPrint(allocator, "-Mzgc={s}", .{root_path});
     const output_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{absolute_output});
     var command: std.ArrayList([]const u8) = .empty;
-    try command.appendSlice(allocator, &.{ zig, "build-lib", "-dynamic", optimize_arg });
-    if (target_os == .linux) {
+    try command.appendSlice(allocator, &.{ zig, if (artifact_kind == .executable) "build-exe" else "build-lib", optimize_arg });
+    if (artifact_kind == .shared) try command.append(allocator, "-dynamic");
+    if (artifact_kind == .static) try command.append(allocator, "-static");
+    if (artifact_kind == .shared and target_os == .linux) {
         try command.append(allocator, try std.fmt.allocPrint(
             allocator,
             "-fsoname={s}",
@@ -395,6 +419,9 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     }
     if (target) |value| {
         try command.appendSlice(allocator, &.{ "-target", value });
+    }
+    if (cpu) |value| {
+        try command.appendSlice(allocator, &.{ "-mcpu", value });
     }
     try command.appendSlice(allocator, &.{ "--dep", "executable", "--dep", "zgc", root_arg, "--dep", "zgc" });
     if (graph_path != null) try command.appendSlice(allocator, &.{ "--dep", "graph" });
@@ -428,16 +455,20 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     return absolute_output;
 }
 
-fn defaultOutput(allocator: std.mem.Allocator, input: []const u8, target_os: std.Target.Os.Tag) ![]const u8 {
+fn defaultOutput(allocator: std.mem.Allocator, input: []const u8, target_os: std.Target.Os.Tag, kind: ArtifactKind) ![]const u8 {
     const basename = std.fs.path.basename(input);
     const extension = std.fs.path.extension(basename);
     const stem = basename[0 .. basename.len - extension.len];
-    const suffix = switch (target_os) {
-        .windows => ".dll",
-        .macos, .ios, .tvos, .watchos, .visionos => ".dylib",
-        else => ".so",
+    const suffix = switch (kind) {
+        .shared => switch (target_os) {
+            .windows => ".dll",
+            .macos, .ios, .tvos, .watchos, .visionos => ".dylib",
+            else => ".so",
+        },
+        .static => if (target_os == .windows) ".lib" else ".a",
+        .executable => if (target_os == .windows) ".exe" else "",
     };
-    return std.fmt.allocPrint(allocator, "{s}{s}", .{ stem, suffix });
+    return std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ if (kind == .static and target_os != .windows) "lib" else "", stem, suffix });
 }
 
 fn validOptimize(value: []const u8) bool {
@@ -471,7 +502,7 @@ fn usage(writer: *std.Io.Writer) !void {
         \\usage: zgc <command> [options]
         \\
         \\commands:
-        \\  compile    specialize a .zgir or Zig definition and emit a native shared library
+        \\  compile    specialize a .zgir or Zig definition and emit a native artifact
         \\  inspect    show metadata and graph representations from a shared library
         \\  time       measure a compiled executable runtime
         \\  cache      show or clear the native compiler cache
@@ -499,12 +530,14 @@ fn inspectUsage(writer: *std.Io.Writer) !void {
 
 fn compileUsage(writer: *std.Io.Writer) !void {
     try writer.writeAll(
-        \\usage: zgc compile <graph.zgir|definition.zig> [-o <library>] [options]
+        \\usage: zgc compile <graph.zgir|definition.zig> [-o <artifact>] [options]
         \\
         \\options:
-        \\  -o, --output <path>      output shared library path
+        \\  -o, --output <path>      output artifact path
+        \\  --artifact <kind>        shared (default), static, or executable
         \\  -O, --optimize <mode>   Debug, ReleaseSafe, ReleaseFast, or ReleaseSmall
         \\  --target <triple>        Zig compilation target
+        \\  --cpu <model>            Zig CPU model and features (for example, cortex_m0plus)
         \\  --selection-target <name>  balanced, memory, fast, or small
         \\  --frontier-index <n>   select a retained executable by index
         \\  --zig <path>             Zig executable (default: zig from PATH)

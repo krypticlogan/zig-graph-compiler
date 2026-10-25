@@ -9,6 +9,19 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const translate_abi = b.addTranslateC(.{
+        .root_source_file = b.path("bindings/c/zgc_executable.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = false,
+    });
+    translate_abi.addIncludePath(b.path("bindings/c"));
+    const runtime_mod = b.addModule("zgc_runtime", .{
+        .root_source_file = b.path("bindings/zig/runtime.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zgc_abi_c", .module = translate_abi.createModule() }},
+    });
     const cli_options = b.addOptions();
     cli_options.addOption([]const u8, "source_root", b.root.joinString(b.allocator, ".") catch @panic("OOM"));
     cli_options.addOption(u32, "abi_version", @import("src/artifact/abi.zig").version);
@@ -111,6 +124,19 @@ pub fn build(b: *std.Build) void {
     const zgc_object = b.addObject(.{ .name = "zgc-check", .root_module = zgc_mod });
     check_zgc.dependOn(&zgc_object.step);
 
+    const check_runtime = b.step("check-runtime", "Compile the Zig artifact runtime module");
+    const runtime_object = b.addObject(.{ .name = "zgc-runtime-check", .root_module = runtime_mod });
+    check_runtime.dependOn(&runtime_object.step);
+
+    const docs = b.step("docs", "Generate the ZGC Zig API documentation in zig-out/docs/api");
+    const docs_object = b.addObject(.{ .name = "zgc-docs", .root_module = zgc_mod });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs_object.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs/api",
+    });
+    docs.dependOn(&install_docs.step);
+
     const check_inspect_cli = b.step("check-inspect-cli", "Compile the inspection CLI module");
     const inspect_check_mod = b.createModule(.{
         .root_source_file = b.path("src/cli/inspect.zig"),
@@ -179,6 +205,7 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(check_cli_step);
     check_step.dependOn(check_tests_step);
     check_step.dependOn(check_zgc);
+    check_step.dependOn(check_runtime);
     check_step.dependOn(check_inspect_cli);
     check_step.dependOn(check_runner);
     check_step.dependOn(check_abi);
@@ -213,7 +240,7 @@ pub fn build(b: *std.Build) void {
     const benchmark_target = b.option([]const u8, "optimization_target", "Executable selection: balanced, memory, fast, or small") orelse "balanced";
     const benchmark_frontier_index = b.option(usize, "frontier_index", "Force this zero-based retained executable index") orelse std.math.maxInt(usize);
     const benchmark_show_frontier = b.option(bool, "show_frontier", "Print costs for every retained executable") orelse false;
-    const benchmark_results_file = b.option([]const u8, "results_file", "Append benchmark records to a JSON index file") orelse "";
+    const benchmark_results_file = b.option([]const u8, "out", "Append benchmark records to a JSON index file") orelse "";
 
     const benchmark_options = b.addOptions();
     benchmark_options.addOption(usize, "iterations", benchmark_iterations);
@@ -278,6 +305,8 @@ pub fn build(b: *std.Build) void {
     benchmark_step.dependOn(&run_benchmark.step);
 
     const check_workloads = b.step("check-workloads", "Compile every benchmark workload without running it");
+    const benchmark_suite = b.step("benchmark-suite", "Build and run all benchmark workloads sequentially");
+    var previous_workload_run: ?*std.Build.Step = null;
     inline for (.{ "contraction", "reduction", "fusion", "dense", "lbm", "conway" }) |name| {
         const workload = b.createModule(.{
             .root_source_file = b.path("benchmarks/workloads/" ++ name ++ ".zig"),
@@ -302,6 +331,11 @@ pub fn build(b: *std.Build) void {
             }),
         });
         check_workloads.dependOn(&workload_exe.step);
+
+        const run_workload = b.addRunArtifact(workload_exe);
+        if (previous_workload_run) |previous| run_workload.step.dependOn(previous);
+        previous_workload_run = &run_workload.step;
     }
+    benchmark_suite.dependOn(previous_workload_run.?);
     check_step.dependOn(check_workloads);
 }

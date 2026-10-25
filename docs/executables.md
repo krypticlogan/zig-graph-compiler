@@ -11,17 +11,28 @@ incompatible artifact before creating a runtime.
 
 ## Compile a serialized graph
 
-The native `zgc` command specializes a `.zgir` graph and emits the shared
-library directly. The [serialized graph format](zgir.md) is described
-separately:
+The native `zgc` command specializes a `.zgir` graph or Zig definition. It
+emits a shared library by default; `--artifact static` emits a static archive,
+and `--artifact executable` emits a standalone binary. The [serialized graph
+format](zgir.md) is described separately:
 
 ```sh
 zig build
 ./zig-out/bin/zgc compile graph.zgir -o graph.dylib
+./zig-out/bin/zgc compile graph.zgir --artifact static -o libgraph.a
+./zig-out/bin/zgc compile graph.zgir --artifact executable -o graph
 ```
 
+Default filenames use the target platform's extension (`.so`, `.dylib`, or
+`.dll` for shared libraries; `.a` or `.lib` for static libraries; `.exe` on
+Windows for standalone binaries). All three forms expose the executable ABI.
+The standalone binary's entry point performs no inference; a host must call
+its exported ABI functions. `zgc inspect` and `zgc time` load shared libraries,
+not static archives or standalone binaries. Use `--inspectable` when the
+artifact needs the inspection export.
+
 The default optimization mode is `ReleaseFast`. Select another mode, Zig
-executable, target, or source checkout explicitly when needed:
+executable, target, CPU model, or source checkout explicitly when needed:
 
 ```sh
 zgc compile graph.zgir \
@@ -32,6 +43,17 @@ zgc compile graph.zgir \
   --zig /path/to/zig \
   --zgc-root /path/to/zgc
 ```
+
+For a freestanding RP2040 archive, select its Cortex-M0+ CPU explicitly:
+
+```sh
+zgc compile graph.zgir --artifact static \
+  --target thumb-freestanding-eabi --cpu cortex_m0plus \
+  -o libgraph.a
+```
+
+The archive must be linked into Pico firmware with its startup code and memory
+layout; it is not a bootable image or a UF2 file.
 
 `--selection-target` accepts `balanced`, `memory`, `fast`, or `small`;
 `--frontier-index` instead forces a retained executable candidate. These
@@ -153,6 +175,31 @@ A host uses a generated artifact in this order:
 `zgc_runtime_init()` does not allocate. `zgc_runtime_mutable_bytes()` reports the
 mutable tensor arena inside the runtime allocation; it is informational
 and is already included in `zgc_runtime_size()`.
+
+### Zig hosts
+
+For a statically linked artifact, import the `zgc_runtime` module from the ZGC
+build dependency. It translates the canonical C header and provides a reusable
+runtime adapter without importing the graph compiler into the application:
+
+```zig
+const zgc_runtime = @import("zgc_runtime");
+
+var storage: [4096]u8 align(64) = undefined;
+
+pub fn main() !void {
+    var runtime = try zgc_runtime.Runtime.init(storage[0..]);
+    defer runtime.deinit();
+    // Bind or copy sources before runtime.run().
+}
+```
+
+Attach `zgc_dep.module("zgc_runtime")` to the application's root module and
+link the compiled static archive. The caller owns the storage and any bound
+source or output buffers. `zgc_runtime.requirements()` reports the exact
+runtime size and alignment; `Runtime.init` rejects insufficient or misaligned
+storage. The adapter also provides source binding/copying, execution, and
+output access through the same ABI.
 
 ## Sources
 

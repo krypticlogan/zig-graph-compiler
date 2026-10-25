@@ -1,8 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Graph = @import("graph.zig");
 const Storage = @import("../storage/storage.zig");
 const Tensor = @import("tensor.zig");
 const ScalarValue = @import("../storage/dtype.zig").ScalarValue;
+
+var debug_warning_emitted = std.atomic.Value(u8).init(0);
 
 fn EmbeddedStorage(comptime bytes: []const u8, comptime alignment: usize) type {
     const contents = bytes;
@@ -127,6 +130,13 @@ pub fn Executable(
             bound_outputs: [graph.output_ct]?[]u8 = @splat(null),
 
             pub fn init() Self {
+                if (comptime builtin.mode == .debug and builtin.os.tag != .freestanding) {
+                    if (!@inComptime()) {
+                        if (debug_warning_emitted.swap(1, .monotonic) == 0) {
+                            std.log.warn("ZGC executable is built in Debug mode; runtime execution may be much slower than ReleaseFast", .{});
+                        }
+                    }
+                }
                 return .{
                     .memory = @splat(0),
                     .bound_sources = @splat(null),
