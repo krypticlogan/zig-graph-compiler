@@ -3,6 +3,9 @@
 These documents describe the public model-construction flow, compiler pipeline,
 runtime storage, supported operations, constraints, and tooling.
 
+Run `zig build docs` to generate the Zig API reference at
+`zig-out/docs/api/index.html`.
+
 - [Architecture](architecture.md) — definition, semantic graphs, executable
   candidates, validation, memory planning, and generated model execution.
 - [Design constraints](design-constraints.md) — compile-time specialization,
