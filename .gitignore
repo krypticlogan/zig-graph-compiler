@@ -1,24 +1,34 @@
-.zig-cache
+# ides
 .idea
+.vscode
+
+# cache
+.zig-cache
+__pycache__
+.zgc-cache/
+*zig-pkg
+
+# os / init
+.DS_Store
 imgui.ini
 desktop.ini
-synopsis.md
-__pycache__
 /bindings/python/*/build/
 /bindings/python/*/*.egg-info/
 /bindings/python/*/src/*.egg-info/
-/.zgc-cache/
-zig-out
-*zig-pkg
-.DS_Store
-/benchmarks.md
-inspect-out
-playground
-bindings_test
 
+# outputs
+zig-out
+inspect-out
+*.dll
+*.so
+*.a
+*.lib
+*.pdb
+
+# benchmarks
 benchmarks/results.json
 benchmarks/regret.json
 benchmarks/report-regret.py
+
+#misc
 local_notes.md
-# Local fluid solver performance comparisons
-/examples/fluid-dynamics/src/lbm-direct.zig
