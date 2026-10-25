@@ -1,5 +1,6 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const internal = @import("zgc_internal");
+const zgc = internal.api;
 const models = @import("fixtures/models.zig");
 
 test "executable search combines analysis alternatives and schedule variants" {
@@ -36,7 +37,7 @@ test "executable search combines analysis alternatives and schedule variants" {
     try std.testing.expectEqual(.memory_pressure, Executable.selected_executable_candidate.schedule);
     try std.testing.expect(Executable.executable_candidate_frontier.count > 0);
     try std.testing.expect(Executable.executable_candidate_frontier.count <= 16);
-    const fingerprint = zgc.compiler.analysis.fingerprint;
+    const fingerprint = internal.analysis.fingerprint;
     try std.testing.expectEqual(fingerprint.executable(Executable.program), Executable.structural_fingerprint);
     try std.testing.expect(fingerprint.executable(reference.executable) != Executable.structural_fingerprint);
     const cost = Executable.selected_executable_candidate.cost;
@@ -96,7 +97,7 @@ test "model selection honors optimization targets and a forced frontier index" {
 }
 
 test "expression liveness distinguishes a chain from a wide reduction tree" {
-    const Cost = zgc.compiler.analysis.Cost;
+    const Cost = internal.analysis.Cost;
     const Instruction = Cost.Expression.Instruction;
     const chain = comptime blk: {
         var instructions: [16]Instruction = undefined;
@@ -145,7 +146,7 @@ test "expression liveness distinguishes a chain from a wide reduction tree" {
 test "contraction analysis choices lower to distinct specialized plans" {
     const Executable = models.MatmulExecutable;
     const capacity = Executable.internal_capacity;
-    const candidates = comptime zgc.compiler.analysis.ContractionAnalysis(capacity).analyze(Executable.semantic_graph);
+    const candidates = comptime internal.analysis.ContractionAnalysis(capacity).analyze(Executable.semantic_graph);
     try std.testing.expectEqual(@as(usize, 4), candidates.count);
 
     const Strategy = @TypeOf(candidates.values[0].?.strategy);
@@ -155,14 +156,14 @@ test "contraction analysis choices lower to distinct specialized plans" {
         strategies[0] = .scalar;
         break :blk strategies;
     };
-    const baseline = comptime zgc.compiler.planning.Lowering(capacity).lower(
+    const baseline = comptime internal.planning.Lowering(capacity).lower(
         Executable.semantic_graph,
         Executable.semantic_analysis_result.dependencies.topological_order,
         .{},
         .{},
         baseline_strategies,
     );
-    const scalar = comptime zgc.compiler.planning.Lowering(capacity).lower(
+    const scalar = comptime internal.planning.Lowering(capacity).lower(
         Executable.semantic_graph,
         Executable.semantic_analysis_result.dependencies.topological_order,
         .{},
@@ -176,7 +177,7 @@ test "contraction analysis choices lower to distinct specialized plans" {
 test "layout analysis offers propagated and unpacked contraction layouts" {
     const Executable = models.MatmulExecutable;
     const capacity = Executable.internal_capacity;
-    const analysis = zgc.compiler.analysis.LayoutAnalysis(capacity);
+    const analysis = internal.analysis.LayoutAnalysis(capacity);
     const candidates = comptime analysis.analyze(Executable.semantic_graph, Executable.semantic_analysis_result);
     try std.testing.expectEqual(@as(usize, 3), candidates.count);
     try std.testing.expectEqual(.propagated, candidates.values[1].?.regime);
@@ -189,21 +190,21 @@ test "layout analysis offers propagated and unpacked contraction layouts" {
 }
 
 test "structured costs support Pareto dominance" {
-    const baseline: zgc.compiler.PlanCost = .{
+    const baseline: internal.search.PlanCost = .{
         .estimated_runtime_work = 100,
         .peak_memory_bytes = 64,
         .persistent_memory_bytes = 32,
         .scratch_memory_bytes = 8,
         .code_size_units = 4,
     };
-    const improvement: zgc.compiler.PlanCost = .{
+    const improvement: internal.search.PlanCost = .{
         .estimated_runtime_work = 90,
         .peak_memory_bytes = 64,
         .persistent_memory_bytes = 32,
         .scratch_memory_bytes = 8,
         .code_size_units = 4,
     };
-    const tradeoff: zgc.compiler.PlanCost = .{
+    const tradeoff: internal.search.PlanCost = .{
         .estimated_runtime_work = 80,
         .peak_memory_bytes = 128,
         .persistent_memory_bytes = 32,

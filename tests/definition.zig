@@ -1,5 +1,5 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const zgc = @import("zgc_internal").api;
 
 const Sources = enum(usize) { lhs, rhs, auxiliary };
 const Definition = zgc.DefinitionBuilder;
@@ -117,7 +117,7 @@ const reduction_model = model: {
     const bias = builder_sources.parameter(.rhs, .f32, &.{ 1, 4, 1 });
     const biased = builder.add(input, bias);
     builder.output(builder.mean(biased, .{ .axes = &.{ -3, -2 }, .keep_dims = true }));
-    builder.output(builder.max(input, zgc.ReductionOptions{}));
+    builder.output(builder.max(input, zgc.op_options.ReductionOptions{}));
     break :model builder.finish().executable();
 };
 

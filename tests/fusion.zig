@@ -1,5 +1,5 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const zgc = @import("zgc_internal").api;
 
 const ProducerSources = enum(usize) { lhs, rhs };
 const ProducerDefinition = zgc.DefinitionBuilder;

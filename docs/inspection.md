@@ -37,39 +37,7 @@ and does not expose a mutable runtime instance. Inspection support adds code to
 the library but is not part of `zgc_runtime_run()`. Artifacts built against an
 earlier ABI need recompilation before they can be inspected this way.
 
-## Programmatic API
-
-The public `zgc.Inspect` module renders executable metadata to any `std.Io.Writer`
-without changing the generated executable type.
-
-Every generated executable exposes the compile-time metadata consumed by the
-inspector:
-
-```zig
-var buffer: [4096]u8 = undefined;
-var stdout_writer = std.Io.File.stdout().writer(io, &buffer);
-defer stdout_writer.interface.flush() catch {};
-
-try zgc.Inspect.writeExecutable(MyExecutable, &stdout_writer.interface, .{});
-```
-
-`writeExecutable` can include or omit capacity, raw graph, program, tree,
-and memory-plan sections through `zgc.Inspect.Sections`. `MyExecutable.raw_graph`
-contains semantic operations before optimization;
-`MyExecutable.program` contains executable operations and kernel plans. The
-individual renderers are also
-public:
-
-- `writeCapacity`
-- `writeGraph`
-- `writeProgram`
-- `writeExecutableStructure`
-- `writeMemoryPlan`
-- `writeRuntimeMemory`
-
-`writeRuntimeMemory` accepts a runtime instance and a byte limit. The other
-renderers inspect compile-time executable metadata and do not initialize or execute
-the runtime.
+Use an inspectable artifact or the executable-specific CLI module below to inspect a compiled executable.
 
 ## Executable-specific CLI
 

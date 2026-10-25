@@ -57,7 +57,7 @@ exported as public graph-building APIs.
 
 `DefinitionBuilder` is the front end. Its operation
 methods consume and return the concrete `Value` type, whose metadata contains
-an ID, dtype, and `BuildShape`. Build shapes retain their literal dimensions
+an ID, dtype, and `Shape`. Build shapes retain their literal dimensions
 without imposing a maximum rank.
 
 Named sources are introduced through `builder.sources(SourceKey)`. `SourceKey`
@@ -218,10 +218,11 @@ The model API provides:
 - `run()` to execute the selected statically scheduled program;
 - `outputView(index)` to retrieve a typed read-only view.
 
-`zgc.Inspect` consumes the model's compile-time graph and memory-plan metadata
+The internal inspector consumes the model's compile-time graph and memory-plan metadata
 without adding rendering responsibilities to the model, graph, operation,
 tensor, or storage types. It also renders bounded mutable memory from a model
-instance when requested.
+instance when requested. Consumers access inspection through `zgc_inspect_cli`
+or inspectable executable artifacts.
 
 `zgc_executable_abi` specializes a versioned C ABI around a consumer-provided model
 module. It exposes opaque placement initialization, source and output

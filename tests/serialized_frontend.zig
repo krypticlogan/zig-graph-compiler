@@ -1,5 +1,5 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const zgc = @import("zgc_internal").api;
 
 test "serialized frontend instantiates a definition" {
     const source =
@@ -13,8 +13,8 @@ test "serialized frontend instantiates a definition" {
         \\outputs = [%3]
         \\
     ;
-    const Executable = zgc.frontend.executableFromZgir(source);
-    const Memory = zgc.frontend.executableFromZgirWithOptions(source, .{ .target = .memory });
+    const Executable = zgc.compile.executableFromZgir(source);
+    const Memory = zgc.compile.executableFromZgirWithOptions(source, .{ .target = .memory });
     try std.testing.expectEqual(@as(usize, 2), Executable.source_names.len);
     try std.testing.expectEqualStrings("x", Executable.source_names[0]);
     try std.testing.expectEqualStrings("bias", Executable.source_names[1]);
@@ -33,7 +33,7 @@ test "u8 ZGIR executes with matching ABI dtype" {
         \\outputs = [%2]
         \\
     ;
-    const Executable = zgc.frontend.executableFromZgir(source);
+    const Executable = zgc.compile.executableFromZgir(source);
     const Abi = zgc.artifact.ABI.Adapter(Executable);
     var descriptor: zgc.artifact.ABI.SourceDescriptor = undefined;
     try std.testing.expectEqual(.ok, Abi.sourceDescriptor(0, &descriptor));

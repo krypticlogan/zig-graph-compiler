@@ -1,4 +1,5 @@
 const std = @import("std");
+const internal = @import("zgc_internal");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const Workload = @import("benchmark_case");
@@ -311,7 +312,7 @@ fn runBenchmark(comptime Selected: type, init: std.process.Init) !BenchmarkResul
                         candidate.cost.estimated_runtime_work,
                         candidate.cost.peak_memory_bytes,
                         candidate.cost.code_size_units,
-                        @import("zgc").compiler.analysis.fingerprint.executable(candidate.executable),
+                        internal.analysis.fingerprint.executable(candidate.executable),
                     },
                 );
             }

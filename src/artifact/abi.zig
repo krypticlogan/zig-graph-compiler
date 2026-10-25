@@ -1,8 +1,9 @@
-//! ABI for interaction with compiled graphs at runtime
+//! Runtime ABI for pre-compiled graphs
 const std = @import("std");
 
 pub const version: u32 = 2;
 
+/// Error codes returned by ABI functions. These are stable across versions.
 pub const Status = enum(c_int) {
     ok = 0,
     invalid_argument = 1,
@@ -17,6 +18,7 @@ pub const Status = enum(c_int) {
     out_of_memory = 10,
 };
 
+/// Backing type for a tensor. Casting is explicit.
 pub const Dtype = enum(u32) {
     f32 = 1,
     f16 = 2,
@@ -26,6 +28,7 @@ pub const Dtype = enum(u32) {
     u8 = 6,
 };
 
+/// Roles of a source tensor.
 pub const SourceKind = enum(u32) {
     input = 1,
     parameter = 2,
@@ -33,13 +36,25 @@ pub const SourceKind = enum(u32) {
     state = 4,
 };
 
+/// Defines how a source is provided to the runtime.
 pub const SourceBinding = enum(u32) {
+    /// The runtime owns the source and copies values into its own storage.
     owned = 1,
+    /// The runtime borrows a caller-owned source view.
     bound = 2,
+    /// The source is provided at compile time and embedded in the executable. Remains constant at runtime.
     embedded = 3,
 };
 
-pub const OutputBinding = enum(u32) { owned = 1, bound = 2 };
+/// Defines how a group of outputs will be accepted by a caller.
+pub const OutputBinding = enum(u32) {
+   /// The runtime allocates and owns the output storage. Caller must copy values out. 
+    owned = 1, 
+    /// The runtime borrows a caller-owned output view. 
+    /// Caller must provide storage before run().
+    /// Storage may be rebound between runs.
+    bound = 2 
+};
 
 /// Static logical geometry and physical layout for one tensor.
 pub const TensorDescriptor = extern struct {
@@ -69,6 +84,10 @@ pub const TensorView = extern struct {
     tensor: TensorDescriptor,
 };
 
+pub fn adapter(executable: anytype) Adapter(@TypeOf(executable)) {
+    return .{};
+}
+
 /// C-compatible operations specialized around one compiled executable.
 pub fn Adapter(comptime Executable: type) type {
     return struct {
@@ -80,19 +99,24 @@ pub fn Adapter(comptime Executable: type) type {
         pub fn abiVersion() callconv(.c) u32 {
             return version;
         }
-
+        /// Return a stable fingerprint of the executable's structure. 
+        /// This is not a hash of the program's bytes, 
+        /// but rather a fingerprint of the graph's topology, tensor shapes, and metadata.
         pub fn executableStructuralFingerprint() callconv(.c) u64 {
             return Executable.structural_fingerprint;
         }
 
+        /// Return the size of the runtime storage required to run the executable.
         pub fn runtimeSize() callconv(.c) usize {
             return @sizeOf(Runtime);
         }
 
+        /// Return the alignment of the runtime storage required to run the executable.
         pub fn runtimeAlignment() callconv(.c) usize {
             return @alignOf(Runtime);
         }
 
+        /// Return the number of bytes of mutable storage used by the runtime.
         pub fn runtimeMutableBytes() callconv(.c) usize {
             return Executable.memory_plan.byte_count;
         }
@@ -115,7 +139,7 @@ pub fn Adapter(comptime Executable: type) type {
             };
             var output = std.Io.Writer.Allocating.init(std.heap.page_allocator);
             defer output.deinit();
-            _ = @import("../zgc/core/inspect.zig").runCli(Executable, &.{command}, &output.writer) catch return .out_of_memory;
+            _ = @import("zgc_inspect_impl").runCli(Executable, &.{command}, &output.writer) catch return .out_of_memory;
             const bytes = output.written();
             count.* = bytes.len;
             const buffer = destination orelse return .ok;

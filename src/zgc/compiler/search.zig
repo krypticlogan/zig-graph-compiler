@@ -194,7 +194,16 @@ pub const PlanCost = struct {
 
 pub const Origin = enum { reference, planned };
 pub const max_candidates = 16;
-pub const OptimizationTarget = enum { balanced, memory, fast, small };
+pub const OptimizationTarget = enum { 
+        /// Balance runtime work, memory traffic, and code size.
+        balanced, 
+        /// Minimize peak memory usage, including scratch and persistent allocations.
+        memory, 
+        /// Minimize estimated runtime work, including arithmetic, access, and transfer.
+        fast, 
+        /// Minimize code size, including instruction bytes and conversion overhead.
+        small 
+};
 pub const SelectionOptions = struct {
     target: OptimizationTarget = .balanced,
     /// Index into the retained frontier; overrides the optimization target.

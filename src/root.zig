@@ -1,12 +1,19 @@
-//! Public ZGC API.
-pub const frontend = struct {
-    pub const executableFromZgir = @import("zgc/frontend/instantiation.zig").executableFromZgir;
-    pub const executableFromZgirWithOptions = @import("zgc/frontend/instantiation.zig").executableFromZgirWithOptions;
-    pub const ZgirExecutableOptions = @import("zgc/frontend/instantiation.zig").ZgirExecutableOptions;
+//! Public frontend ZGC API.
+
+pub const build = struct {
     pub const DefinitionBuilder = @import("zgc/frontend/definition.zig").DefinitionBuilder;
     pub const Expr = @import("zgc/frontend/expressive.zig");
     pub const Value = @import("zgc/frontend/definition.zig").Value;
-    pub const BuildShape = @import("zgc/frontend/definition.zig").BuildShape;
+    pub const Shape = @import("zgc/frontend/definition.zig").Shape;
+};
+
+pub const compile = struct {
+    pub const executableFromZgir = @import("zgc/frontend/instantiation.zig").executableFromZgir;
+    pub const executableFromZgirWithOptions = @import("zgc/frontend/instantiation.zig").executableFromZgirWithOptions;
+    pub const ZgirExecutableOptions = @import("zgc/frontend/instantiation.zig").ZgirExecutableOptions;
+};
+
+pub const op_options = struct {
     pub const ReductionOptions = @import("zgc/frontend/definition.zig").ReductionOptions;
     pub const FlattenOptions = @import("zgc/frontend/definition.zig").FlattenOptions;
     pub const SliceOptions = @import("zgc/frontend/definition.zig").SliceOptions;
@@ -14,56 +21,25 @@ pub const frontend = struct {
     pub const WindowOptions = @import("zgc/frontend/definition.zig").WindowOptions;
 };
 
-pub const compiler = struct {
-    pub const analysis = @import("zgc/compiler/analysis/root.zig");
-    pub const planning = @import("zgc/compiler/planning/root.zig");
-    pub const PlanCandidate = @import("zgc/compiler/search.zig").PlanCandidate;
-    pub const PlanCost = @import("zgc/compiler/search.zig").PlanCost;
-    pub const MemoryTraffic = @import("zgc/compiler/search.zig").MemoryTraffic;
-    pub const ConversionCost = @import("zgc/compiler/search.zig").ConversionCost;
-    pub const OptimizationTarget = @import("zgc/compiler/search.zig").OptimizationTarget;
-    pub const LayoutRequirement = @import("zgc/compiler/analysis/root.zig").LayoutRequirement;
-    pub const LayoutResult = @import("zgc/compiler/analysis/root.zig").LayoutResult;
-    pub const Validation = @import("zgc/validation.zig");
-};
-
-pub const core = struct {
-    pub const GraphCapacity = @import("zgc/core/graph.zig").Capacity;
-    pub const Tensor = @import("zgc/core/tensor.zig");
-    pub const Executable = @import("zgc/core/executable.zig").Executable;
-};
+pub const Tensor = @import("zgc/core/tensor.zig");
 
 pub const memory = struct {
     pub const Dtype = @import("zgc/storage/dtype.zig").Dtype;
     pub const ScalarValue = @import("zgc/storage/dtype.zig").ScalarValue;
     pub const Source = @import("zgc/storage/source.zig");
-    pub const Storage = @import("zgc/storage/storage.zig");
     pub const Output = @import("zgc/storage/output.zig");
 };
 
-pub const Op = @import("zgc/operations/semantic.zig").Op;
-
-pub const execution = struct {
-    pub const Program = @import("zgc/execution/program.zig").Program;
-    pub const ExecutableCompute = @import("zgc/execution/execution.zig").ExecutableCompute;
-    pub const KernelPlan = @import("zgc/execution/execution.zig").KernelPlan;
-};
-
+/// Runtime ABI for generated executable artifacts.
 pub const artifact = struct {
     pub const ABI = @import("artifact/abi.zig");
 };
 
-pub const DefinitionBuilder = frontend.DefinitionBuilder;
-pub const Expr = frontend.Expr;
-pub const Value = frontend.Value;
-pub const BuildShape = frontend.BuildShape;
-pub const ReductionOptions = frontend.ReductionOptions;
-pub const FlattenOptions = frontend.FlattenOptions;
-pub const SliceOptions = frontend.SliceOptions;
-pub const PadOptions = frontend.PadOptions;
-pub const WindowOptions = frontend.WindowOptions;
-pub const Inspect = @import("zgc/core/inspect.zig");
-
+pub const OptimizationTarget = @import("zgc/compiler/search.zig").OptimizationTarget; // move this type external to the compiler?
+pub const DefinitionBuilder = build.DefinitionBuilder;
+pub const Expr = build.Expr;
+pub const Value = build.Value;
+pub const Shape = build.Shape;
 pub const ext = struct {
     pub const nn = @import("extensions/nn.zig");
     pub const img = @import("extensions/img.zig");

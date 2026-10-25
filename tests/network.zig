@@ -1,5 +1,5 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const zgc = @import("zgc_internal").api;
 const nn = zgc.ext.nn;
 const Sources = enum(usize) { input, w1, b1, w2, b2 };
 const Definition = zgc.DefinitionBuilder;

@@ -1,12 +1,12 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const Inspect = @import("zgc_internal").Inspect;
 const models = @import("fixtures/models.zig");
 const Executable = models.BasicExecutable;
 
 test "inspection renders a generated model through a writer" {
     var buffer: [8192]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try zgc.Inspect.writeExecutable(Executable, &writer, .{});
+    try Inspect.writeExecutable(Executable, &writer, .{});
     const output = writer.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "Capacity(nodes=2") != null);
@@ -19,7 +19,7 @@ test "inspection renders a generated model through a writer" {
 test "inspection CLI selects individual representations" {
     var buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try std.testing.expect(try zgc.Inspect.runCli(Executable, &.{"semantic-graph"}, &writer));
+    try std.testing.expect(try Inspect.runCli(Executable, &.{"semantic-graph"}, &writer));
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "== Optimized semantic graph ==") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "== Raw graph ==") == null);
@@ -33,7 +33,7 @@ test "inspection CLI infers a uniquely exported executable declaration" {
     var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try std.testing.expect(try zgc.Inspect.runModuleCli(SingleExecutableModule, &.{"summary"}, &writer));
+    try std.testing.expect(try Inspect.runModuleCli(SingleExecutableModule, &.{"summary"}, &writer));
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "== Capacity ==") != null);
 }
 
@@ -41,7 +41,7 @@ test "inspection CLI selects an executable declaration from a module" {
     var buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try std.testing.expect(try zgc.Inspect.runModuleCli(
+    try std.testing.expect(try Inspect.runModuleCli(
         models,
         &.{ "--executable", "FullExecutable", "summary" },
         &writer,
@@ -53,7 +53,7 @@ test "inspection CLI requires selection when a module exports multiple executabl
     var buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try std.testing.expect(!try zgc.Inspect.runModuleCli(models, &.{"summary"}, &writer));
+    try std.testing.expect(!try Inspect.runModuleCli(models, &.{"summary"}, &writer));
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "select one with --executable") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "BasicExecutable") != null);
@@ -64,7 +64,7 @@ test "inspection renders bounded model memory" {
     var model = Executable.Runtime.init();
     var buffer: [512]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try zgc.Inspect.writeRuntimeMemory(&model, &writer, 8);
+    try Inspect.writeRuntimeMemory(&model, &writer, 8);
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "showing=8") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "40 bytes omitted") != null);
@@ -74,7 +74,7 @@ test "inspection renders reused regions in tensor order" {
     var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try zgc.Inspect.writeMemoryPlan(models.BoundReuseExecutable, &writer);
+    try Inspect.writeMemoryPlan(models.BoundReuseExecutable, &writer);
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "MemoryPlan(bytes=32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "t1: [0..16)") != null);

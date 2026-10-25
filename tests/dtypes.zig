@@ -1,5 +1,6 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const internal = @import("zgc_internal");
+const zgc = internal.api;
 const Dtype = zgc.memory.Dtype;
 
 const NumericSources = enum(usize) { lhs, rhs };
@@ -63,17 +64,17 @@ test "boolean graph executes logical and selection operations" {
 
 test "cross-dtype validation distinguishes matching values and boolean masks" {
     const Value = struct { dtype: Dtype };
-    const Validation = zgc.compiler.Validation;
+    const Validation = internal.Validation;
     try std.testing.expect(Validation.dtypesMatch(&[_]Value{ .{ .dtype = .u8 }, .{ .dtype = .u8 } }));
     try std.testing.expect(!Validation.dtypesMatch(&[_]Value{ .{ .dtype = .u8 }, .{ .dtype = .i8 } }));
     try std.testing.expect(!Validation.dtypesMatch(&[_]Value{ .{ .dtype = .f32 }, .{ .dtype = .f16 } }));
     try std.testing.expect(Validation.dtypeIsNumeric(Value{ .dtype = .u8 }));
     try std.testing.expect(!Validation.dtypeIsNumeric(Value{ .dtype = .bool }));
     try std.testing.expect(Validation.dtypeKindIs(Value{ .dtype = .u8 }, .unsigned_integer));
-    try std.testing.expectEqual(Dtype.u8, zgc.Op.Compute.inferDtype(.where, &[_]Value{
+    try std.testing.expectEqual(Dtype.u8, internal.Op.Compute.inferDtype(.where, &[_]Value{
         .{ .dtype = .bool }, .{ .dtype = .u8 }, .{ .dtype = .u8 },
     }));
-    try std.testing.expectEqual(Dtype.bool, zgc.Op.Compute.inferDtype(.equal, &[_]Value{
+    try std.testing.expectEqual(Dtype.bool, internal.Op.Compute.inferDtype(.equal, &[_]Value{
         .{ .dtype = .i32 }, .{ .dtype = .i32 },
     }));
 }

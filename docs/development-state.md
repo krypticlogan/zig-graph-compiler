@@ -109,7 +109,7 @@ on Zig 0.17.0. The API should still be expected to change.
   execution, and typed output views.
 - Views alias their root tensor's storage without adding another allocation.
 - Writer-based capacity, graph, tree, memory-plan, and bounded model-memory
-  inspection through `zgc.Inspect`.
+  inspection through the inspection CLI and inspectable executable artifacts.
 
 ### Tooling
 

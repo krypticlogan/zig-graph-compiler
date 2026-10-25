@@ -1,5 +1,5 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const zgc = @import("zgc_internal").api;
 const models = @import("fixtures/models.zig");
 
 test "memory plan reuses an expired intermediate region" {

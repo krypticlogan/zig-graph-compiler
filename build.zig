@@ -3,12 +3,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Shared private renderer used by the inspection entry points and ABI.
+    const inspect_mod = b.createModule(.{
+        .root_source_file = b.path("src/zgc/core/inspect.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // library
     const zgc_mod = b.addModule("zgc", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    zgc_mod.addImport("zgc_inspect_impl", inspect_mod);
     const translate_abi = b.addTranslateC(.{
         .root_source_file = b.path("bindings/c/zgc_executable.h"),
         .target = target,
@@ -43,7 +51,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/cli/inspect.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "zgc", .module = zgc_mod }},
+        .imports = &.{.{ .name = "zgc_inspect_impl", .module = inspect_mod }},
     });
     _ = b.addModule("zgc_executable_runner", .{
         .root_source_file = b.path("src/artifact/executable_runner.zig"),
@@ -77,11 +85,15 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const test_root_mod = b.createModule(.{
-        .root_source_file = b.path("src/root.zig"),
+    // Private module: tests and benchmarks share the public API
+    // and its implementation types without exporting internals to consumers.
+    const internal_mod = b.createModule(.{
+        .root_source_file = b.path("src/internal.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    internal_mod.addImport("zgc_inspect_impl", inspect_mod);
 
     const test_mod = b.addModule("zgc_tests", .{
         .root_source_file = b.path("tests/tests.zig"),
@@ -89,7 +101,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    test_mod.addImport("zgc", test_root_mod);
+    test_mod.addImport("zgc_internal", internal_mod);
     test_mod.addImport("embed_params", test_embed_params);
 
     const tests = b.addTest(.{
@@ -133,7 +145,7 @@ pub fn build(b: *std.Build) void {
     const install_docs = b.addInstallDirectory(.{
         .source_dir = docs_object.getEmittedDocs(),
         .install_dir = .prefix,
-        .install_subdir = "docs/api",
+        .install_subdir = "web/docs",
     });
     docs.dependOn(&install_docs.step);
 
@@ -143,7 +155,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "zgc_inspect_impl", .module = inspect_mod },
             .{ .name = "executable", .module = runner_test_executable },
         },
     });
@@ -258,7 +270,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "zgc_internal", .module = internal_mod },
             .{ .name = "build_options", .module = benchmark_options_module },
         },
     });
@@ -282,7 +294,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "zgc", .module = zgc_mod },
+            .{ .name = "zgc_internal", .module = internal_mod },
             .{ .name = "benchmark_selection", .module = benchmark_selection },
         },
     });
@@ -294,7 +306,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "zgc", .module = zgc_mod },
+                .{ .name = "zgc_internal", .module = internal_mod },
                 .{ .name = "build_options", .module = benchmark_options_module },
                 .{ .name = "benchmark_case", .module = benchmark_case },
             },
@@ -313,7 +325,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "zgc", .module = zgc_mod },
+                .{ .name = "zgc_internal", .module = internal_mod },
                 .{ .name = "benchmark_selection", .module = benchmark_selection },
             },
         });
@@ -324,7 +336,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "zgc", .module = zgc_mod },
+                    .{ .name = "zgc_internal", .module = internal_mod },
                     .{ .name = "build_options", .module = benchmark_options_module },
                     .{ .name = "benchmark_case", .module = workload },
                 },

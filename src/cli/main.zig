@@ -401,6 +401,8 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     };
     const abi_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", artifact_root });
     const root_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "root.zig" });
+    const inspect_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "zgc", "core", "inspect.zig" });
+    const inspect_arg = try std.fmt.allocPrint(allocator, "-Mzgc_inspect_impl={s}", .{inspect_path});
     const optimize_arg = try std.fmt.allocPrint(allocator, "-O{s}", .{optimize});
     const root_arg = try std.fmt.allocPrint(allocator, "-Mroot={s}", .{abi_path});
     const executable_arg = try std.fmt.allocPrint(allocator, "-Mexecutable={s}", .{definition_path});
@@ -426,7 +428,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     try command.appendSlice(allocator, &.{ "--dep", "executable", "--dep", "zgc", root_arg, "--dep", "zgc" });
     if (graph_path != null) try command.appendSlice(allocator, &.{ "--dep", "graph" });
     for (imports.items) |item| try command.appendSlice(allocator, &.{ "--dep", item.name });
-    try command.appendSlice(allocator, &.{ executable_arg, zgc_arg });
+    try command.appendSlice(allocator, &.{ executable_arg, "--dep", "zgc_inspect_impl", zgc_arg, inspect_arg });
     if (graph_path) |path| {
         try command.append(allocator, try std.fmt.allocPrint(allocator, "-Mgraph={s}", .{path}));
     }

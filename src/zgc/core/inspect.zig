@@ -1,7 +1,4 @@
 const std = @import("std");
-const Execution = @import("../execution/execution.zig");
-const Op = @import("../operations/semantic.zig").Op;
-const Tensor = @import("tensor.zig");
 
 const Writer = std.Io.Writer;
 
@@ -402,7 +399,7 @@ fn invalidCommand(writer: *Writer, command: []const u8) Writer.Error!bool {
     return false;
 }
 
-fn writeTensorInfo(writer: *Writer, id: Tensor.Id, info: anytype) Writer.Error!void {
+fn writeTensorInfo(writer: *Writer, id: usize, info: anytype) Writer.Error!void {
     try writer.print("  t{d}: {s} shape=", .{ id, @tagName(info.dtype) });
     try writeShape(writer, &info.shape);
     switch (info.origin) {
@@ -416,7 +413,7 @@ fn writeTensorInfo(writer: *Writer, id: Tensor.Id, info: anytype) Writer.Error!v
     }
 }
 
-fn writeScalarValue(writer: *Writer, value: @import("../storage/dtype.zig").ScalarValue) Writer.Error!void {
+fn writeScalarValue(writer: *Writer, value: anytype) Writer.Error!void {
     switch (value.data_type) {
         .f32 => try writer.print("f32({d})", .{value.get(.f32)}),
         .f16 => try writer.print("f16({d})", .{value.get(.f16)}),
@@ -437,12 +434,17 @@ fn writeShape(writer: *Writer, shape: anytype) Writer.Error!void {
 }
 
 fn writeOp(writer: *Writer, op: anytype) Writer.Error!void {
-    if (comptime @TypeOf(op) == Op) return writeSemanticOp(writer, op);
-    if (comptime @TypeOf(op) == Execution.Op) {
+    const Compute = @FieldType(@TypeOf(op), "compute");
+    if (comptime !@hasField(Compute, "direct")) return writeSemanticOp(writer, op);
+    if (comptime @hasField(Compute, "kernel")) {
+        const SemanticOp = union(enum) {
+            view: @FieldType(@TypeOf(op), "view"),
+            compute: @FieldType(Compute, "direct"),
+        };
         return switch (op) {
-            .view => |view| writeSemanticOp(writer, .{ .view = view }),
+            .view => |view| writeSemanticOp(writer, @as(SemanticOp, .{ .view = view })),
             .compute => |compute| switch (compute) {
-                .direct => |semantic| writeSemanticOp(writer, .{ .compute = semantic }),
+                .direct => |semantic| writeSemanticOp(writer, @as(SemanticOp, .{ .compute = semantic })),
                 .kernel => |plan| switch (plan) {
                     .map => |map| switch (map.strategy) {
                         .traversal => switch (map.region.body) {
@@ -487,7 +489,7 @@ fn writeOp(writer: *Writer, op: anytype) Writer.Error!void {
     @compileError("inspection does not support operation type " ++ @typeName(@TypeOf(op)));
 }
 
-fn writeSemanticOp(writer: *Writer, op: Op) Writer.Error!void {
+fn writeSemanticOp(writer: *Writer, op: anytype) Writer.Error!void {
     switch (op) {
         .compute => |compute| switch (compute) {
             .relu => try writer.writeAll("relu"),
@@ -577,7 +579,7 @@ fn writeSemanticOp(writer: *Writer, op: Op) Writer.Error!void {
     }
 }
 
-fn writeElementwiseProgram(writer: *Writer, program: @import("../compiler/optimization/fusion/expression.zig").Program) Writer.Error!void {
+fn writeElementwiseProgram(writer: *Writer, program: anytype) Writer.Error!void {
     try writer.writeAll("fused_elementwise[");
     for (program.instructions, 0..) |instruction, index| {
         if (index != 0) try writer.writeAll(", ");
@@ -595,7 +597,7 @@ fn writeDimensions(writer: *Writer, dimensions: []const usize) Writer.Error!void
     try writer.writeByte(']');
 }
 
-fn writeReduction(writer: *Writer, name: []const u8, attrs: Op.Compute.ReductionAttrs) Writer.Error!void {
+fn writeReduction(writer: *Writer, name: []const u8, attrs: anytype) Writer.Error!void {
     try writer.print("{s}(axes=[", .{name});
     var first = true;
     for (0..64) |axis| {
@@ -610,7 +612,7 @@ fn writeReduction(writer: *Writer, name: []const u8, attrs: Op.Compute.Reduction
 fn writeTensorTree(
     writer: *Writer,
     comptime graph: anytype,
-    tensor_id: Tensor.Id,
+    tensor_id: usize,
     depth: usize,
     is_last: bool,
     ancestor_is_last: []bool,

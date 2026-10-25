@@ -53,11 +53,11 @@ pub const WindowOptions = struct {
 };
 
 /// Tensor shape description for graph construction. The shape is immutable.
-pub const BuildShape = struct {
+pub const Shape = struct {
     rank: usize,
     dims: []const usize,
 
-    pub fn init(comptime dims: []const usize) BuildShape {
+    pub fn init(comptime dims: []const usize) Shape {
         for (dims) |extent| {
             if (extent == 0) @compileError("tensor dimensions must be greater than zero");
         }
@@ -65,15 +65,15 @@ pub const BuildShape = struct {
         return .{ .rank = dims.len, .dims = &owned_dims };
     }
 
-    pub fn slice(self: BuildShape) []const usize {
+    pub fn slice(self: Shape) []const usize {
         return self.dims;
     }
 
-    pub fn at(self: BuildShape, axis: usize) usize {
+    pub fn at(self: Shape, axis: usize) usize {
         return self.dims[axis];
     }
 
-    pub fn elementCount(self: BuildShape) usize {
+    pub fn elementCount(self: Shape) usize {
         var count: usize = 1;
         for (self.dims) |extent| count *= extent;
         return count;
@@ -84,7 +84,7 @@ pub const BuildShape = struct {
 pub const Value = struct {
     id: Tensor.Id,
     dtype: Dtype,
-    shape: BuildShape,
+    shape: Shape,
 };
 
 pub const Node = struct {
@@ -224,7 +224,7 @@ pub const DefinitionBuilder = struct {
         const tensor_value: Value = .{
             .id = tensor_id,
             .dtype = dtype,
-            .shape = BuildShape.init(&.{}),
+            .shape = Shape.init(&.{}),
         };
         self.appendTensor(.{
             .value = tensor_value,
@@ -456,7 +456,7 @@ pub const DefinitionBuilder = struct {
         const normalized_b = normalizeAxis(tensor.shape.rank, axis_b);
         var dims: [tensor.shape.rank]usize = tensor.shape.slice()[0..tensor.shape.rank].*;
         std.mem.swap(usize, &dims[normalized_a], &dims[normalized_b]);
-        const shape = BuildShape.init(&dims);
+        const shape = Shape.init(&dims);
         return self.addNode(
             .{ .view = .{ .transpose = .{
                 .axis_a = @intCast(normalized_a),
@@ -473,7 +473,7 @@ pub const DefinitionBuilder = struct {
         comptime tensor: Value,
         comptime extents: []const usize,
     ) Value {
-        const shape = BuildShape.init(extents);
+        const shape = Shape.init(extents);
         if (shape.elementCount() != tensor.shape.elementCount()) {
             @compileError("reshape must preserve the tensor element count");
         }
@@ -496,7 +496,7 @@ pub const DefinitionBuilder = struct {
                 @compileError("broadcast source extent must equal its target or be one");
             }
         }
-        const shape = BuildShape.init(extents);
+        const shape = Shape.init(extents);
         return self.addNode(.{ .view = .broadcast }, &.{tensor}, tensor.dtype, shape);
     }
 
@@ -524,7 +524,7 @@ pub const DefinitionBuilder = struct {
             dims[output_axis] = extent;
             output_axis += 1;
         }
-        const shape = BuildShape.init(&dims);
+        const shape = Shape.init(&dims);
 
         return self.addNode(.{ .view = .{ .flatten = .{
             .start_axis = @intCast(start_axis),
@@ -543,7 +543,7 @@ pub const DefinitionBuilder = struct {
             dims[output_axis] = extent;
             output_axis += 1;
         }
-        const shape = BuildShape.init(&dims);
+        const shape = Shape.init(&dims);
         return self.addNode(.{ .view = .{ .squeeze = .{ .axis = @intCast(normalized) } } }, &.{tensor}, tensor.dtype, shape);
     }
 
@@ -558,7 +558,7 @@ pub const DefinitionBuilder = struct {
             else
                 tensor.shape.at(output_axis - 1);
         }
-        const shape = BuildShape.init(&dims);
+        const shape = Shape.init(&dims);
         return self.addNode(.{ .view = .{ .unsqueeze = .{ .axis = @intCast(normalized) } } }, &.{tensor}, tensor.dtype, shape);
     }
 
@@ -605,7 +605,7 @@ pub const DefinitionBuilder = struct {
         const length = (end - options.start + options.step - 1) / options.step;
         var dims: [tensor.shape.rank]usize = tensor.shape.slice()[0..tensor.shape.rank].*;
         dims[axis] = length;
-        const shape = BuildShape.init(&dims);
+        const shape = Shape.init(&dims);
         return self.addNode(.{ .view = .{ .slice = .{
             .axis = @intCast(axis),
             .start = options.start,
@@ -628,7 +628,7 @@ pub const DefinitionBuilder = struct {
             .dilations = options.dilations,
         };
         const inferred = op_module.inferWindowsShape(&.{tensor}, attrs, tensor.shape.rank + attrs.sizes.len);
-        return self.addNode(.{ .view = .{ .windows = attrs } }, &.{tensor}, tensor.dtype, BuildShape.init(inferred.slice()));
+        return self.addNode(.{ .view = .{ .windows = attrs } }, &.{tensor}, tensor.dtype, Shape.init(inferred.slice()));
     }
 
     pub fn output(comptime self: *Self, comptime value: Value) void {
@@ -684,7 +684,7 @@ pub const DefinitionBuilder = struct {
         const value: Value = .{
             .id = id,
             .dtype = dtype,
-            .shape = BuildShape.init(shape_extents),
+            .shape = Shape.init(shape_extents),
         };
         self.appendTensor(.{
             .value = value,
@@ -713,7 +713,7 @@ pub const DefinitionBuilder = struct {
         }
         const inferred = compute.inferShape(&inference_inputs, shape_capacity);
         const dtype = compute.inferDtype(inputs);
-        return self.addNode(.{ .compute = compute }, inputs, dtype, BuildShape.init(inferred.slice()));
+        return self.addNode(.{ .compute = compute }, inputs, dtype, Shape.init(inferred.slice()));
     }
 
     fn addNode(
@@ -721,7 +721,7 @@ pub const DefinitionBuilder = struct {
         comptime op: Op,
         comptime inputs: []const Value,
         comptime dtype: Dtype,
-        comptime shape: BuildShape,
+        comptime shape: Shape,
     ) Value {
         const node_id = self.nodes.len;
         const tensor_id = self.tensors.len;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const zgc = @import("zgc");
+const zgc = @import("zgc_internal").api;
 const build_options = @import("build_options");
 
 pub fn executable(
@@ -7,7 +7,7 @@ pub fn executable(
     comptime sources: []const @TypeOf(definition).SourceOverride,
 ) type {
     const target = std.meta.stringToEnum(
-        zgc.compiler.OptimizationTarget,
+        zgc.OptimizationTarget,
         build_options.optimization_target,
     ) orelse @compileError("optimization_target must be balanced, memory, fast, or small");
     return definition.executableWith(.{
