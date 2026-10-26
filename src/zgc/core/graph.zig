@@ -65,4 +65,7 @@ pub const Capacity = struct {
     max_outputs: usize = 0,
     max_sources: usize = 0,
     max_rank: usize = 0,
+    /// Null reserves one output reference per tensor during executable planning.
+    /// A completed executable uses its exact output-reference count.
+    max_output_refs: ?usize = null,
 };

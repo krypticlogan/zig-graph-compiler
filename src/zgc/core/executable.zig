@@ -99,6 +99,8 @@ pub fn Executable(
         pub const structural_fingerprint = @import("../compiler/analysis/fingerprint.zig").executable(graph);
         pub const memory_plan = plan;
         pub const internal_capacity = capacities;
+        pub const raw_capacity = @import("../compiler/finalization.zig").count(raw);
+        pub const semantic_capacity = @import("../compiler/finalization.zig").count(SemanticValidated.graph);
         pub const raw_graph = raw;
         pub const semantic_graph = SemanticValidated.graph;
         pub const semantic_optimization_result = semantic_optimization;
@@ -107,6 +109,9 @@ pub fn Executable(
         pub const reference_executable_candidate = executable_search.reference;
         pub const executable_candidate_frontier = executable_search.frontier;
         pub const executable_candidate_count = executable_search.generated_count;
+        pub const search_executable_limit_reached = executable_search.executable_limit_reached;
+        pub const search_composition_attempts = executable_search.composition_attempts;
+        pub const search_composition_limit_reached = executable_search.composition_limit_reached;
         pub const representation_candidate_count = executable_search.representation_candidate_count;
         pub const fusion_candidate_count = executable_search.fusion_candidate_count;
         pub const layout_candidate_count = executable_search.layout_candidate_count;
@@ -115,7 +120,18 @@ pub fn Executable(
         pub const generated_contraction_strategies = executable_search.generated_contraction_strategies;
         pub const selection_options = selection;
         pub const selected_executable_candidate_index = executable_search.selectedIndex(selection);
-        pub const selected_executable_candidate = executable_search.selected(selection);
+        pub const selected_executable_candidate = candidate: {
+            const selected = executable_search.selected(selection);
+            break :candidate @import("../compiler/search.zig").PlanCandidate(capacities){
+                .executable = graph,
+                .origin = selected.origin,
+                .fusion_regime = selected.fusion_regime,
+                .layout_regime = selected.layout_regime,
+                .remap_regime = selected.remap_regime,
+                .schedule = selected.schedule,
+                .cost = selected.cost,
+            };
+        };
         pub const lifetime_analysis = lifetimes;
         pub const source_plan = SourcePlan;
         pub const output_plan = OutputPlan;

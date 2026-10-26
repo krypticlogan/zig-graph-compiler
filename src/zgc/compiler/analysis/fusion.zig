@@ -1,3 +1,4 @@
+const Set = @import("../node_set.zig").Set;
 const Elementwise = @import("../../operations/elementwise.zig");
 const Reduction = @import("../../operations/reduction.zig");
 const Graph = @import("../../core/graph.zig");
@@ -39,7 +40,7 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
         fn selectIndependentReductions(comptime graph: SemanticGraph, comptime analysis: GraphFacts) FusionSelection(capacity.max_nodes) {
             var result: FusionSelection(capacity.max_nodes) = .{};
             for (analysis.dependencies.topological_order[0..graph.node_ct]) |node_id| {
-                const descriptor = reductionForNode(graph, node_id) orelse continue;
+                const descriptor = analysis.reductions[node_id] orelse continue;
                 const input_id = graph.input_refs[graph.nodes[node_id].?.input_start].?;
                 const region_id = result.region_count;
                 var group: Group(capacity.max_nodes) = .{
@@ -48,9 +49,12 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                     .anchor_tensor = input_id,
                     .emit_node = node_id,
                 };
-                group.reduction_nodes[0] = node_id;
+                const reduction_nodes = [_]?usize{node_id};
+                group.reduction_nodes = &reduction_nodes;
                 group.reduction_count = 1;
-                result.reduction_storage[region_id] = group;
+                group.members.set(node_id);
+                const frozen = group;
+                result.reduction_storage[region_id] = &frozen;
                 result.node_region[node_id] = .{ .reduction = region_id };
                 result.region_count += 1;
             }
@@ -66,24 +70,28 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
 
         fn select(comptime graph: SemanticGraph, comptime analysis: GraphFacts) FusionSelection(capacity.max_nodes) {
             var result: FusionSelection(capacity.max_nodes) = .{};
+            var groups: [capacity.max_nodes]?Group(capacity.max_nodes) = @splat(null);
+            var first: [capacity.max_nodes]?usize = @splat(null);
+            var last: [capacity.max_nodes]?usize = @splat(null);
+            var next: [capacity.max_nodes]?usize = @splat(null);
 
             for (analysis.dependencies.topological_order[0..graph.node_ct]) |node_id| {
-                const descriptor = reductionForNode(graph, node_id) orelse continue;
+                const descriptor = analysis.reductions[node_id] orelse continue;
                 const input_id = graph.input_refs[graph.nodes[node_id].?.input_start].?;
-                const anchor = fusionAnchor(graph, analysis, input_id);
+                const anchor = analysis.fusion_anchor[input_id];
 
                 var selected_group: ?usize = null;
                 for (0..result.region_count) |region_id| {
-                    const group = result.reduction_storage[region_id].?;
+                    const group = groups[region_id].?;
                     if (!compatible(graph, group, descriptor, input_id, anchor)) continue;
-                    if (!canDelayExistingOutputs(graph, analysis, group, node_id)) continue;
+                    if (!canDelayExistingOutputs(graph, analysis, first[region_id], &next, node_id)) continue;
                     selected_group = region_id;
                     break;
                 }
 
                 const region_id = selected_group orelse blk: {
                     const id = result.region_count;
-                    result.reduction_storage[id] = .{
+                    groups[id] = .{
                         .descriptor = descriptor,
                         .domain_tensor = input_id,
                         .anchor_tensor = anchor,
@@ -91,14 +99,25 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                     result.region_count += 1;
                     break :blk id;
                 };
-                var group = &result.reduction_storage[region_id].?;
-                group.reduction_nodes[group.reduction_count] = node_id;
+                var group = &groups[region_id].?;
+                if (last[region_id]) |previous| next[previous] = node_id else first[region_id] = node_id;
+                last[region_id] = node_id;
                 group.reduction_count += 1;
                 group.emit_node = node_id;
             }
 
             for (0..result.region_count) |region_id| {
-                var group = &result.reduction_storage[region_id].?;
+                var group = &groups[region_id].?;
+                var ids: [capacity.max_nodes]?usize = @splat(null);
+                var cursor = first[region_id];
+                var count: usize = 0;
+                while (cursor) |node_id| {
+                    ids[count] = node_id;
+                    count += 1;
+                    cursor = next[node_id];
+                }
+                const reduction_nodes = ids[0..count].*;
+                group.reduction_nodes = &reduction_nodes;
                 var has_producer = false;
                 for (group.reduction_nodes[0..group.reduction_count]) |maybe_node_id| {
                     const node_id = maybe_node_id.?;
@@ -107,24 +126,31 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                     has_producer = markFoldedProducers(graph, analysis, input_id, &group.nodes) or has_producer;
                 }
 
+                if (group.reduction_count > 1 or has_producer) {
+                    group.members = group.nodes;
+                    for (group.reduction_nodes[0..group.reduction_count]) |entry| group.members.set(entry.?);
+                }
+                var folded = group.nodes.iterator();
+                while (folded.next()) |node_id| group.traffic_saved_bytes += analysis.tensor_bytes[graph.nodes[node_id].?.result] * 2;
+                const frozen = group.*;
+                result.reduction_storage[region_id] = &frozen;
                 if (group.reduction_count == 1 and !has_producer) continue;
                 for (group.reduction_nodes[0..group.reduction_count]) |maybe_node_id| {
                     result.node_region[maybe_node_id.?] = .{ .reduction = region_id };
                 }
-                for (group.nodes, 0..) |folded, node_id| {
-                    if (folded) result.node_region[node_id] = .{ .reduction = region_id };
-                }
+                var folded_nodes = group.nodes.iterator();
+                while (folded_nodes.next()) |node_id| result.node_region[node_id] = .{ .reduction = region_id };
             }
 
             var topo_index = graph.node_ct;
             while (topo_index > 0) {
                 topo_index -= 1;
                 const node_id = analysis.dependencies.topological_order[topo_index];
-                if (result.node_region[node_id] != null or pointwiseForNode(graph, node_id) == null) continue;
+                if (result.node_region[node_id] != null or analysis.pointwise[node_id] == null) continue;
                 if (hasUnassignedPointwiseConsumer(graph, analysis, result, node_id)) continue;
 
                 var group: MapGroup(capacity.max_nodes) = .{ .root_node = node_id };
-                group.nodes[node_id] = true;
+                group.nodes.set(node_id);
                 group.node_count = 1;
                 const root = graph.nodes[node_id].?;
                 for (0..root.input_count) |input_index| {
@@ -138,21 +164,18 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                 }
                 if (group.node_count < 2) continue;
 
-                const map_id = result.map_count;
-                result.map_storage[map_id] = group;
-                result.map_count += 1;
-                for (group.nodes, 0..) |included, included_node| {
-                    if (included) result.node_region[included_node] = .{ .map = map_id };
+                var internal_nodes = group.nodes.iterator();
+                while (internal_nodes.next()) |included| {
+                    if (included != group.root_node) group.traffic_saved_bytes += analysis.tensor_bytes[graph.nodes[included].?.result] * 2;
                 }
+                const map_id = result.map_count;
+                const frozen = group;
+                result.map_storage[map_id] = &frozen;
+                result.map_count += 1;
+                var members = group.nodes.iterator();
+                while (members.next()) |included_node| result.node_region[included_node] = .{ .map = map_id };
             }
             return result;
-        }
-
-        fn pointwiseForNode(comptime graph: SemanticGraph, comptime node_id: usize) ?Elementwise.Operation {
-            return switch (graph.nodes[node_id].?.op) {
-                .compute => |compute| Elementwise.fromCompute(compute),
-                .view => null,
-            };
         }
 
         fn hasUnassignedPointwiseConsumer(
@@ -165,7 +188,7 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
             if (analysis.use_counts[result_id] != 1 or analysis.is_output[result_id]) return false;
             for (analysis.dependencies.consumersOf(result_id)) |edge| {
                 const consumer_id = edge.node;
-                if (selection.node_region[consumer_id] != null or pointwiseForNode(graph, consumer_id) == null) continue;
+                if (selection.node_region[consumer_id] != null or analysis.pointwise[consumer_id] == null) continue;
                 return true;
             }
             return false;
@@ -183,10 +206,10 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                 .node => |id| id,
                 .source, .literal => return,
             };
-            if (selection.node_region[producer_id] != null or pointwiseForNode(graph, producer_id) == null) return;
-            if (group.nodes[producer_id]) return;
+            if (selection.node_region[producer_id] != null or analysis.pointwise[producer_id] == null) return;
+            if (group.nodes.isSet(producer_id)) return;
 
-            group.nodes[producer_id] = true;
+            group.nodes.set(producer_id);
             group.node_count += 1;
             const producer = graph.nodes[producer_id].?;
             for (0..producer.input_count) |input_index| {
@@ -198,13 +221,6 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                     group,
                 );
             }
-        }
-
-        fn reductionForNode(comptime graph: SemanticGraph, comptime node_id: usize) ?Reduction.Descriptor {
-            return switch (graph.nodes[node_id].?.op) {
-                .compute => |compute| Reduction.fromCompute(compute),
-                .view => null,
-            };
         }
 
         fn compatible(
@@ -232,37 +248,23 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
         fn canDelayExistingOutputs(
             comptime graph: SemanticGraph,
             comptime analysis: GraphFacts,
-            comptime group: Group(capacity.max_nodes),
+            first: ?usize,
+            next: *const [capacity.max_nodes]?usize,
             comptime candidate_node: usize,
         ) bool {
-            for (group.reduction_nodes[0..group.reduction_count]) |maybe_node_id| {
-                const reduction_node = maybe_node_id.?;
+            var cursor = first;
+            while (cursor) |reduction_node| {
                 if (analysis.dependencies.dependsOn(graph, candidate_node, reduction_node)) return false;
+                cursor = next[reduction_node];
             }
             return true;
-        }
-
-        fn fusionAnchor(comptime graph: SemanticGraph, comptime analysis: GraphFacts, comptime tensor_id: usize) usize {
-            const producer_id = switch (graph.tensors[tensor_id].?.origin) {
-                .node => |id| id,
-                .source, .literal => return tensor_id,
-            };
-            if (analysis.use_counts[tensor_id] != 1 or analysis.is_output[tensor_id]) return tensor_id;
-            const producer = graph.nodes[producer_id].?;
-            const compute = switch (producer.op) {
-                .compute => |value| value,
-                .view => return tensor_id,
-            };
-            const operation = Elementwise.fromCompute(compute) orelse return tensor_id;
-            if (!operation.isReductionCompatible() or producer.input_count == 0) return tensor_id;
-            return fusionAnchor(graph, analysis, graph.input_refs[producer.input_start].?);
         }
 
         fn markFoldedProducers(
             comptime graph: SemanticGraph,
             comptime analysis: GraphFacts,
             comptime tensor_id: usize,
-            folded: *[capacity.max_nodes]bool,
+            folded: *Set(capacity.max_nodes),
         ) bool {
             const producer_id = switch (graph.tensors[tensor_id].?.origin) {
                 .node => |id| id,
@@ -276,7 +278,7 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
             };
             if (Elementwise.fromCompute(compute) == null) return false;
 
-            folded[producer_id] = true;
+            folded.set(producer_id);
             for (0..producer.input_count) |input_index| {
                 _ = markFoldedProducers(
                     graph,
@@ -320,8 +322,8 @@ pub fn FusionCandidates(comptime node_count: usize) type {
 
 pub fn FusionSelection(comptime node_count: usize) type {
     return struct {
-        reduction_storage: [node_count]?Group(node_count) = @splat(null),
-        map_storage: [node_count]?MapGroup(node_count) = @splat(null),
+        reduction_storage: [node_count]?*const Group(node_count) = @splat(null),
+        map_storage: [node_count]?*const MapGroup(node_count) = @splat(null),
         node_region: [node_count]?FusionRegionRef = @splat(null),
         region_count: usize = 0,
         map_count: usize = 0,
@@ -333,7 +335,8 @@ pub const FusionRegionRef = union(enum) { reduction: usize, map: usize };
 pub fn MapGroup(comptime node_count: usize) type {
     return struct {
         root_node: usize,
-        nodes: [node_count]bool = @splat(false),
+        traffic_saved_bytes: u128 = 0,
+        nodes: Set(node_count) = .{},
         node_count: usize = 0,
     };
 }
@@ -341,11 +344,13 @@ pub fn MapGroup(comptime node_count: usize) type {
 pub fn Group(comptime node_count: usize) type {
     return struct {
         descriptor: Reduction.Descriptor,
+        members: Set(node_count) = .{},
+        traffic_saved_bytes: u128 = 0,
         domain_tensor: usize,
         anchor_tensor: usize,
-        reduction_nodes: [node_count]?usize = @splat(null),
+        reduction_nodes: []const ?usize = &.{},
         reduction_count: usize = 0,
-        nodes: [node_count]bool = @splat(false),
+        nodes: Set(node_count) = .{},
         emit_node: usize = 0,
     };
 }

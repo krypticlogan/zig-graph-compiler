@@ -8,6 +8,91 @@ fn square(comptime expression: zgc.Expr) zgc.Expr {
     return expression.mul(expression);
 }
 
+test "builder chunks finish into exact ordered arrays at chunk boundaries" {
+    inline for (.{ 0, 1, 63, 64, 65, 127, 128, 129, 193 }) |count| {
+        const definition = comptime blk: {
+            @setEvalBranchQuota(1_000_000);
+            var builder = Definition.init();
+            for (0..count) |index| {
+                const scalar = builder.scalar(.f32, @floatFromInt(index));
+                builder.output(builder.neg(scalar));
+            }
+            break :blk builder.finish();
+        };
+        try std.testing.expectEqual(@as(usize, count), definition.node_count);
+        try std.testing.expectEqual(@as(usize, 2 * count), definition.tensor_count);
+        try std.testing.expectEqual(@as(usize, count), definition.input_ref_count);
+        try std.testing.expectEqual(@as(usize, count), definition.output_count);
+        try std.testing.expectEqual(@as(usize, count), definition.nodes.len);
+        try std.testing.expectEqual(@as(usize, 2 * count), definition.tensors.len);
+        try std.testing.expectEqual(@as(usize, count), definition.input_refs.len);
+        try std.testing.expectEqual(@as(usize, count), definition.outputs.len);
+        for (definition.nodes, 0..) |node, index| {
+            try std.testing.expectEqual(.neg, node.op.compute);
+            try std.testing.expectEqual(index, node.input_start);
+            try std.testing.expectEqual(@as(usize, 1), node.input_count);
+            try std.testing.expectEqual(2 * index, definition.input_refs[index]);
+            try std.testing.expectEqual(2 * index + 1, node.result);
+            try std.testing.expectEqual(node.result, definition.outputs[index]);
+            try std.testing.expectEqual(index, definition.tensors[node.result].origin.node);
+            try std.testing.expectEqual(@as(f32, @floatFromInt(index)), definition.tensors[2 * index].origin.literal.get(.f32));
+        }
+    }
+    try std.testing.expectEqual(@as(usize, std.math.maxInt(u32)), Definition.max_size);
+}
+
+test "builder copies and finished snapshots remain independent across chunks" {
+    const definitions = comptime blk: {
+        var builder = Definition.init();
+        for (0..65) |index| builder.output(builder.scalar(.f32, @floatFromInt(index)));
+        const snapshot = builder.finish();
+        var left = builder;
+        var right = builder;
+        for (0..65) |_| left.output(left.scalar(.f32, 100));
+        for (0..65) |_| right.output(right.full(.f32, &.{ 2, 3 }, 200));
+        builder.output(builder.scalar(.f32, 300));
+        break :blk .{ snapshot, builder.finish(), left.finish(), right.finish() };
+    };
+    try std.testing.expectEqual(@as(usize, 65), definitions[0].tensor_count);
+    try std.testing.expectEqual(@as(usize, 66), definitions[1].tensor_count);
+    try std.testing.expectEqual(@as(usize, 130), definitions[2].output_count);
+    try std.testing.expectEqual(@as(usize, 130), definitions[3].output_count);
+    try std.testing.expectEqual(@as(usize, 0), @TypeOf(definitions[0]).max_rank);
+    try std.testing.expectEqual(@as(usize, 0), @TypeOf(definitions[2]).max_rank);
+    try std.testing.expectEqual(@as(usize, 2), @TypeOf(definitions[3]).max_rank);
+    inline for (definitions) |definition| {
+        for (0..65) |index| {
+            try std.testing.expectEqual(@as(f32, @floatFromInt(index)), definition.tensors[index].origin.literal.get(.f32));
+        }
+    }
+    try std.testing.expectEqual(@as(f32, 300), definitions[1].tensors[65].origin.literal.get(.f32));
+    try std.testing.expectEqual(@as(f32, 100), definitions[2].tensors[65].origin.literal.get(.f32));
+    try std.testing.expectEqual(@as(f32, 200), definitions[3].tensors[65].origin.literal.get(.f32));
+}
+
+test "sources declared after completed tensor chunks retain names and counts" {
+    const definition = comptime blk: {
+        var builder = Definition.init();
+        const sources = builder.sources(Sources);
+        const lhs = sources.input(.lhs, .f32, &.{4});
+        for (0..130) |index| _ = builder.scalar(.f32, @floatFromInt(index));
+        const rhs = sources.input(.rhs, .f32, &.{4});
+        builder.output(builder.add(lhs, rhs));
+        break :blk builder.finish();
+    };
+    try std.testing.expectEqual(@as(usize, 133), definition.tensor_count);
+    try std.testing.expectEqual(@as(usize, 0), definition.tensors[0].origin.source);
+    try std.testing.expectEqual(@as(usize, 1), definition.tensors[131].origin.source);
+    try std.testing.expectEqualStrings("lhs", definition.source_names[0]);
+    try std.testing.expectEqualStrings("rhs", definition.source_names[1]);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 131 }, &definition.input_refs);
+    var runtime = definition.executable().Runtime.init();
+    try runtime.copyInput(.lhs, &.{ 1, 2, 3, 4 });
+    try runtime.copyInput(.rhs, &.{ 4, 3, 2, 1 });
+    runtime.run();
+    try std.testing.expectEqualSlices(f32, &.{ 5, 5, 5, 5 }, runtime.outputView(0).contiguousSlice().?);
+}
+
 test "concrete builder derives finished definition storage and rank" {
     const LocalSources = enum(usize) { input };
     const definition = comptime blk: {

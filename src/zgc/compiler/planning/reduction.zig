@@ -116,7 +116,7 @@ pub fn Planner(comptime capacity: Graph.Capacity) type {
                     else => null,
                 };
                 if (producer_id) |where_id| {
-                    if (group.nodes[where_id] and graph.nodes[where_id].?.op == .compute and
+                    if (group.nodes.isSet(where_id) and graph.nodes[where_id].?.op == .compute and
                         graph.nodes[where_id].?.op.compute == .where)
                     {
                         const where_node = graph.nodes[where_id].?;

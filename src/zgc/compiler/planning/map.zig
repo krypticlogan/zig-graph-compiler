@@ -97,7 +97,7 @@ pub fn Planner(comptime capacity: Graph.Capacity) type {
 
             var reaches_remap = false;
             for (0..graph.node_ct) |node_id| {
-                if (group.nodes[node_id]) continue;
+                if (group.nodes.isSet(node_id)) continue;
                 const node = graph.nodes[node_id].?;
                 switch (node.op) {
                     .view => continue,
@@ -638,7 +638,7 @@ pub fn Planner(comptime capacity: Graph.Capacity) type {
             comptime tensor_id: usize,
             comptime fusion_regions: FusionRegions,
             comptime remap_regions: RemapRegions,
-        ) ?Analysis.MapGroup(capacity.max_nodes) {
+        ) ?*const Analysis.MapGroup(capacity.max_nodes) {
             const storage_tensor = graph.tensors[tensor_id].?.storage_tensor;
             const producer_id = switch (graph.tensors[storage_tensor].?.origin) {
                 .node => |node_id| node_id,
@@ -658,7 +658,7 @@ pub fn Planner(comptime capacity: Graph.Capacity) type {
                 .node => |id| id,
                 .source, .literal => return 1,
             };
-            if (!group.nodes[producer_id]) return 1;
+            if (!group.nodes.isSet(producer_id)) return 1;
             const node = graph.nodes[producer_id].?;
             return switch (node.op.compute) {
                 .concat => blk: {
@@ -715,7 +715,7 @@ pub fn Planner(comptime capacity: Graph.Capacity) type {
                     return;
                 },
             };
-            if (!group.nodes[producer_id]) {
+            if (!group.nodes.isSet(producer_id)) {
                 emitLeaf(graph, tensor_id, destination_offset, destination_strides, built);
                 return;
             }

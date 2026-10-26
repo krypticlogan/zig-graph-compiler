@@ -18,7 +18,7 @@ pub fn Program(comptime capacity: Graph.Capacity, Operation: type) type {
         nodes: [capacity.max_nodes]?Invocation = @splat(null),
         tensors: [capacity.max_tensors]?TensorInfo = @splat(null),
         input_refs: [capacity.max_input_refs]?Tensor.Id = @splat(null),
-        output_refs: [capacity.max_tensors]?Tensor.Id = @splat(null),
+        output_refs: [capacity.max_output_refs orelse capacity.max_tensors]?Tensor.Id = @splat(null),
         outputs: [capacity.max_outputs]?Tensor.Id = @splat(null),
         sources: [capacity.max_sources]?Tensor.Source = @splat(null),
         materialized: [capacity.max_tensors]bool = @splat(false),

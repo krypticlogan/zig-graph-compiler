@@ -43,17 +43,14 @@ pub const W = 320;
 
 const Sources = enum(usize) {
     f,
-    smoke_g,
-    smoke_injection,
+    mass,
+    flags,
     force_x,
     force_y,
     omega,
-    smoke_omega,
-    smoke_retention,
     cx,
     cy,
     fluid_weights,
-    smoke_weights,
 };
 
 const Definition = zgc.DefinitionBuilder;
@@ -229,21 +226,21 @@ fn streamSolid(
     return b.concat(&.{ body, wall }, 0);
 }
 
-fn define(b: *Definition) void {
+fn lbmStep(b: *Definition) Value {
     const sources = b.sources(Sources);
     // ---------------------------------------------------------------------
     // Sources
     // ---------------------------------------------------------------------
     const f = b.expr(sources.input(.f, .f32, &.{ H, W, 9 }));
-    const smoke_g = b.expr(sources.input(.smoke_g, .f32, &.{ H, W, 5 }));
+    // const smoke_g = b.expr(sources.input(.smoke_g, .f32, &.{ H, W, 5 }));
 
     // Amount of smoke concentration added during this step.
     // Usually zero everywhere except at emitter cells.
-    const smoke_injection = b.expr(sources.input(
-        .smoke_injection,
-        .f32,
-        &.{ H, W, 1 },
-    ));
+    // const smoke_injection = b.expr(sources.input(
+    //     .smoke_injection,
+    //     .f32,
+    //     &.{ H, W, 1 },
+    // ));
 
     const force_x = b.expr(sources.input(.force_x, .f32, &.{ H, W, 1 }));
     const force_y = b.expr(sources.input(.force_y, .f32, &.{ H, W, 1 }));
@@ -255,16 +252,24 @@ fn define(b: *Definition) void {
     // for cs^2 = 1/3 in standard D2Q9 lattice units.
     const omega = b.expr(sources.input(.omega, .f32, &.{1}));
 
+    // const mass = b.expr(sources.input(
+    //     .mass, .f32, &.{ H, W, 1 },
+    // ));
+    //
+    // const flags = b.expr(sources.input(
+    //     .flags, .u8, &.{ H, W, 1 },
+    // ));
+
     // Passive-scalar relaxation:
     //
     //   D = cs^2 * (1 / smoke_omega - 1/2)
     //
     // D2Q5 below also uses cs^2 = 1/3.
-    const smoke_omega = b.expr(sources.input(.smoke_omega, .f32, &.{1}));
+    // const smoke_omega = b.expr(sources.input(.smoke_omega, .f32, &.{1}));
 
     // 1.0 => no decay.
     // e.g. 0.997 => retain 99.7% of smoke each step.
-    const smoke_retention = b.expr(sources.input(.smoke_retention, .f32, &.{1}));
+    // const smoke_retention = b.expr(sources.input(.smoke_retention, .f32, &.{1}));
 
     // Fluid directions:
     //
@@ -276,23 +281,6 @@ fn define(b: *Definition) void {
     // Standard D2Q9 weights:
     // [4/9, 1/9,1/9,1/9,1/9, 1/36,1/36,1/36,1/36]
     const fluid_weights = b.expr(sources.constant(.fluid_weights, .f32, &.{9}));
-
-    // D2Q5 passive-scalar weights:
-    // [1/3, 1/6, 1/6, 1/6, 1/6]
-    const smoke_weights = b.expr(sources.constant(.smoke_weights, .f32, &.{5}));
-
-    // First five fluid directions are exactly the D2Q5 cardinal set.
-    const smoke_cx = cx.slice(.{
-        .axis = 0,
-        .start = 0,
-        .end = 5,
-    });
-
-    const smoke_cy = cy.slice(.{
-        .axis = 0,
-        .start = 0,
-        .end = 5,
-    });
 
     // ---------------------------------------------------------------------
     // Scalars
@@ -393,119 +381,23 @@ fn define(b: *Definition) void {
         &.{ s0, s1, s2, s3, s4, s5, s6, s7, s8 },
         2,
     );
-
-    // =====================================================================
-    // SMOKE: DECAY + SOURCE INJECTION
-    // =====================================================================
-
-    // Decay every population uniformly so total smoke concentration decays
-    // by smoke_retention as well.
-    const smoke_retained = smoke_g.mul(smoke_retention);
-
-    // Inject source mass into the rest population. This adds smoke exactly,
-    // independently of smoke_omega, before collision redistributes it.
-    const g0_retained = b.expr(channel(b, smoke_retained.value, 0));
-    const g1_retained = channel(b, smoke_retained.value, 1);
-    const g2_retained = channel(b, smoke_retained.value, 2);
-    const g3_retained = channel(b, smoke_retained.value, 3);
-    const g4_retained = channel(b, smoke_retained.value, 4);
-
-    const g0_injected = g0_retained.add(smoke_injection);
-
-    const smoke_pre_collision_g = b.concat(
-        &.{
-            g0_injected.value,
-            g1_retained,
-            g2_retained,
-            g3_retained,
-            g4_retained,
-        },
-        2,
-    );
-
-    // Scalar concentration:
-    //
-    // smoke = sum_i g_i
-    const smoke = b.expr(smoke_pre_collision_g).sum(.{
-        .axes = &.{2},
-        .keep_dims = true,
-    });
-
-    // =====================================================================
-    // SMOKE: D2Q5 ADVECTION-DIFFUSION EQUILIBRIUM
-    // =====================================================================
-
-    // The passive scalar is advected by the fluid velocity.
-    //
-    // g_eq_i = w_i * smoke * [1 + 3(e_i.u)]
-    //
-    // The fluid velocity is not changed by the passive scalar here.
-    const smoke_eu_x = collision_ux.mul(smoke_cx);
-    const smoke_eu_y = collision_uy.mul(smoke_cy);
-    const smoke_eu = smoke_eu_x.add(smoke_eu_y);
-
-    const smoke_equilibrium_poly = smoke_eu.apply(passiveScalarPolynomial, .{ one, three });
-
-    const smoke_eq = smoke.mul(smoke_weights).mul(smoke_equilibrium_poly);
-
-    // =====================================================================
-    // SMOKE: BGK COLLISION
-    // =====================================================================
-
-    // g* = g + omega_s(g_eq - g)
-    const smoke_post_collision = b.expr(smoke_pre_collision_g).apply(bgkCollision, .{
-        smoke_eq,
-        smoke_omega,
-    });
-
-    // =====================================================================
-    // SMOKE: STREAMING + NO-FLUX DOMAIN WALLS
-    // =====================================================================
-
-    const g0 = channel(b, smoke_post_collision.value, 0);
-    const g1 = channel(b, smoke_post_collision.value, 1);
-    const g2 = channel(b, smoke_post_collision.value, 2);
-    const g3 = channel(b, smoke_post_collision.value, 3);
-    const g4 = channel(b, smoke_post_collision.value, 4);
-
-    // Bounce-back at the outer walls creates a simple no-flux boundary for
-    // the scalar field.
-    const sg0 = g0;
-    const sg1 = streamSolid(b, g1, g3, 1, 0);
-    const sg2 = streamSolid(b, g2, g4, 0, 1);
-    const sg3 = streamSolid(b, g3, g1, -1, 0);
-    const sg4 = streamSolid(b, g4, g2, 0, -1);
-
-    const next_smoke_g = b.concat(
-        &.{ sg0, sg1, sg2, sg3, sg4 },
-        2,
-    );
-
-    // Render the post-step concentration rather than the pre-step field.
-    const next_smoke = b.expr(next_smoke_g).sum(.{
-        .axes = &.{2},
-        .keep_dims = true,
-    });
-
     // =====================================================================
     // OUTPUTS
     // =====================================================================
 
     // Recurrent state.
     b.output(next_f);
-    b.output(next_smoke_g);
-
     // Inspection / rendering.
-    b.output(next_smoke.value);
     b.output(rho.value);
     b.output(ux.value);
     b.output(uy.value);
+    return next_f;
 }
 
 pub const definition = blk: {
     @setEvalBranchQuota(2_000_000);
     var builder = Definition.init();
-    define(&builder);
+    _ = lbmStep(&builder);
     break :blk builder.finish();
 };
 

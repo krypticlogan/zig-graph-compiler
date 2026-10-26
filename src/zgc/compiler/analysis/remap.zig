@@ -1,3 +1,4 @@
+const Set = @import("../node_set.zig").Set;
 const std = @import("std");
 const Graph = @import("../../core/graph.zig");
 const Semantic = @import("../../operations/semantic.zig");
@@ -31,7 +32,7 @@ pub fn RemapCandidates(comptime node_count: usize) type {
 
 pub fn RemapSelection(comptime node_count: usize) type {
     return struct {
-        groups: [node_count]?RemapGroup(node_count) = @splat(null),
+        groups: [node_count]?*const RemapGroup(node_count) = @splat(null),
         node_region: [node_count]?usize = @splat(null),
         region_count: usize = 0,
     };
@@ -40,7 +41,8 @@ pub fn RemapSelection(comptime node_count: usize) type {
 pub fn RemapGroup(comptime node_count: usize) type {
     return struct {
         root_node: usize,
-        nodes: [node_count]bool = @splat(false),
+        traffic_saved_bytes: u128 = 0,
+        nodes: Set(node_count) = .{},
         node_count: usize = 0,
     };
 }
@@ -71,11 +73,16 @@ pub fn RemapAnalysis(comptime capacity: Graph.Capacity) type {
                 const node_id = facts.dependencies.topological_order[topo_index];
                 if (!isRemapNode(graph, node_id) or hasComposableConsumer(graph, facts, node_id)) continue;
                 const region_id = selection.region_count;
-                selection.groups[region_id] = .{ .root_node = node_id };
-                includeNode(graph, facts, node_id, &selection.groups[region_id].?);
-                for (selection.groups[region_id].?.nodes, 0..) |included, included_node| {
-                    if (included) selection.node_region[included_node] = region_id;
+                var group: RemapGroup(capacity.max_nodes) = .{ .root_node = node_id };
+                includeNode(graph, facts, node_id, &group);
+                var internal_nodes = group.nodes.iterator();
+                while (internal_nodes.next()) |included| {
+                    if (included != group.root_node) group.traffic_saved_bytes += facts.tensor_bytes[graph.nodes[included].?.result] * 2;
                 }
+                const frozen = group;
+                selection.groups[region_id] = &frozen;
+                var members = selection.groups[region_id].?.nodes.iterator();
+                while (members.next()) |included_node| selection.node_region[included_node] = region_id;
                 selection.region_count += 1;
             }
             return selection;
@@ -87,8 +94,8 @@ pub fn RemapAnalysis(comptime capacity: Graph.Capacity) type {
             comptime node_id: usize,
             group: *RemapGroup(capacity.max_nodes),
         ) void {
-            if (group.nodes[node_id]) return;
-            group.nodes[node_id] = true;
+            if (group.nodes.isSet(node_id)) return;
+            group.nodes.set(node_id);
             group.node_count += 1;
             const node = graph.nodes[node_id].?;
             const absorbs_inputs = switch (node.op.compute) {

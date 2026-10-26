@@ -15,29 +15,14 @@ const FreeSpan = struct {
 fn ReusePlanner(comptime allocation_capacity: usize) type {
     return struct {
         const Self = @This();
-        const Active = struct {
-            region: StorageRegion,
-            end_node_exclusive: ?usize,
-        };
-
         // Two spare entries cover the transient state before adjacent spans
         // are coalesced after a release or split.
         free_spans: [allocation_capacity + 2]FreeSpan = undefined,
         free_count: usize = 0,
-        active: [allocation_capacity]?Active = @splat(null),
         high_water: usize = 0,
 
-        fn releaseBefore(planner: *Self, begin_node: usize) void {
-            for (&planner.active) |*maybe_active| {
-                const active = maybe_active.* orelse continue;
-                const end_node = active.end_node_exclusive orelse continue;
-                if (end_node > begin_node) continue;
-                planner.addFree(.{
-                    .offset = active.region.offset,
-                    .len_bytes = active.region.len_bytes,
-                });
-                maybe_active.* = null;
-            }
+        fn release(planner: *Self, region: StorageRegion) void {
+            planner.addFree(.{ .offset = region.offset, .len_bytes = region.len_bytes });
         }
 
         fn allocate(
@@ -104,56 +89,35 @@ fn ReusePlanner(comptime allocation_capacity: usize) type {
             };
         }
 
-        fn track(
-            planner: *Self,
-            tensor_id: usize,
-            region: StorageRegion,
-            end_node_exclusive: ?usize,
-        ) void {
-            if (region.len_bytes == 0) return;
-            planner.active[tensor_id] = .{
-                .region = region,
-                .end_node_exclusive = end_node_exclusive,
-            };
-        }
-
         fn addFree(planner: *Self, span: FreeSpan) void {
             if (span.len_bytes == 0) return;
-            if (planner.free_count == planner.free_spans.len) {
-                @compileError("memory planner free-span capacity exceeded");
+            // Locate this span by offset, then coalesce only its neighbors.
+            // Existing free spans are sorted, disjoint, and nonadjacent.
+            var low: usize = 0;
+            var high = planner.free_count;
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                if (planner.free_spans[middle].offset < span.offset) low = middle + 1 else high = middle;
             }
-            planner.free_spans[planner.free_count] = span;
-            planner.free_count += 1;
-
-            var index = planner.free_count - 1;
-            while (index > 0 and
-                planner.free_spans[index - 1].offset > planner.free_spans[index].offset)
-            {
-                std.mem.swap(FreeSpan, &planner.free_spans[index - 1], &planner.free_spans[index]);
+            var index = low;
+            if (index > 0 and planner.free_spans[index - 1].offset + planner.free_spans[index - 1].len_bytes >= span.offset) {
                 index -= 1;
+                const end = @max(planner.free_spans[index].offset + planner.free_spans[index].len_bytes, span.offset + span.len_bytes);
+                planner.free_spans[index].len_bytes = end - planner.free_spans[index].offset;
+            } else {
+                if (planner.free_count == planner.free_spans.len) @compileError("memory planner free-span capacity exceeded");
+                var cursor = planner.free_count;
+                while (cursor > index) : (cursor -= 1) planner.free_spans[cursor] = planner.free_spans[cursor - 1];
+                planner.free_spans[index] = span;
+                planner.free_count += 1;
             }
-
-            var read_index: usize = 0;
-            var write_count: usize = 0;
-            while (read_index < planner.free_count) {
-                const current = planner.free_spans[read_index];
-                if (write_count > 0) {
-                    var previous = &planner.free_spans[write_count - 1];
-                    const previous_end = previous.offset + previous.len_bytes;
-                    if (current.offset <= previous_end) {
-                        previous.len_bytes = @max(
-                            previous_end,
-                            current.offset + current.len_bytes,
-                        ) - previous.offset;
-                        read_index += 1;
-                        continue;
-                    }
-                }
-                planner.free_spans[write_count] = current;
-                write_count += 1;
-                read_index += 1;
+            while (index + 1 < planner.free_count) {
+                const next = planner.free_spans[index + 1];
+                const end = planner.free_spans[index].offset + planner.free_spans[index].len_bytes;
+                if (end < next.offset) break;
+                planner.free_spans[index].len_bytes = @max(end, next.offset + next.len_bytes) - planner.free_spans[index].offset;
+                _ = planner.removeFree(index + 1);
             }
-            planner.free_count = write_count;
         }
 
         fn removeFree(planner: *Self, index: usize) FreeSpan {
@@ -180,17 +144,38 @@ pub fn MemoryPlan(
     var planner: ReusePlanner(g.tensor_ct) = .{};
 
     var max_alignment: usize = 1;
+    var eligible: [g.tensor_ct]bool = @splat(false);
+    var starts: [g.node_ct]?usize = @splat(null);
+    var ends: [g.node_ct + 1]?usize = @splat(null);
+    var next_start: [g.tensor_ct]?usize = @splat(null);
+    var next_end: [g.tensor_ct]?usize = @splat(null);
 
-    // Sources are populated before execution and retain their values for the
-    // entire run. Reserve all owned source storage before making any region
-    // available to computed tensors, regardless of tensor insertion order.
-    for (0..g.tensor_ct) |tensor_id| {
+    // Prepend in reverse tensor order so simultaneous events preserve the old
+    // ascending-ID allocation and release order, including best-fit ties.
+    for (0..g.tensor_ct) |reverse| {
+        const tensor_id = g.tensor_ct - 1 - reverse;
         if (comptime @hasField(@TypeOf(g), "materialized")) {
             if (!g.materialized[tensor_id]) continue;
         }
+        const info = g.tensors[tensor_id].?;
+        if (info.storage_tensor != tensor_id or !SourcePlan.isOwned(info) or OutputPlan.isBoundRoot(tensor_id)) continue;
+        eligible[tensor_id] = true;
+        if (info.origin != .node) continue;
+        const lifetime = lifetime_analysis.tensor_lifetimes[tensor_id];
+        if (lifetime.begin_node >= g.node_ct) @compileError("allocation begins outside the executable");
+        next_start[tensor_id] = starts[lifetime.begin_node];
+        starts[lifetime.begin_node] = tensor_id;
+        if (lifetime.end_node_exclusive) |end| {
+            if (end <= lifetime.begin_node or end > g.node_ct) @compileError("allocation has an invalid lifetime end");
+            next_end[tensor_id] = ends[end];
+            ends[end] = tensor_id;
+        }
+    }
+
+    // Reserve owned sources before the first invocation, in tensor ID order.
+    for (0..g.tensor_ct) |tensor_id| {
+        if (!eligible[tensor_id]) continue;
         const tensor_info = g.tensors[tensor_id].?;
-        if (tensor_info.storage_tensor != tensor_id) continue;
-        if (!SourcePlan.isOwned(tensor_info) or OutputPlan.isBoundRoot(tensor_id)) continue;
         switch (tensor_info.origin) {
             .source => {},
             .node, .literal => continue,
@@ -205,36 +190,25 @@ pub fn MemoryPlan(
         const len_bytes = tensor_info.shape.elementCount() * dtype.byteSize();
         const region = planner.allocate(len_bytes, alignment);
         memory_plan[tensor_id] = region;
-        planner.track(tensor_id, region, lifetime.end_node_exclusive);
         max_alignment = @max(max_alignment, alignment);
     }
 
-    // Node results may reuse storage once an earlier computed lifetime ends.
-    // Allocate in execution order rather than tensor insertion order so that
-    // releaseBefore only advances through time.
+    // Process lifetime ends before starts at the same invocation. Each owned
+    // tensor is allocated once and released at most once; no global scans here.
     for (0..g.node_ct) |begin_node| {
-        planner.releaseBefore(begin_node);
-        for (0..g.tensor_ct) |tensor_id| {
-            if (comptime @hasField(@TypeOf(g), "materialized")) {
-                if (!g.materialized[tensor_id]) continue;
-            }
-            const tensor_info = g.tensors[tensor_id].?;
-            if (tensor_info.storage_tensor != tensor_id) continue;
-            if (!SourcePlan.isOwned(tensor_info) or OutputPlan.isBoundRoot(tensor_id)) continue;
-            switch (tensor_info.origin) {
-                .node => {},
-                .source, .literal => continue,
-            }
-
-            const lifetime = lifetime_analysis.tensor_lifetimes[tensor_id];
-            if (lifetime.begin_node != begin_node) continue;
-            const dtype = tensor_info.dtype;
-            const alignment = dtype.alignment();
-            const len_bytes = tensor_info.shape.elementCount() * dtype.byteSize();
-            const region = planner.allocate(len_bytes, alignment);
+        var release_id = ends[begin_node];
+        while (release_id) |tensor_id| {
+            planner.release(memory_plan[tensor_id].?);
+            release_id = next_end[tensor_id];
+        }
+        var allocation_id = starts[begin_node];
+        while (allocation_id) |tensor_id| {
+            const info = g.tensors[tensor_id].?;
+            const alignment = info.dtype.alignment();
+            const region = planner.allocate(info.shape.elementCount() * info.dtype.byteSize(), alignment);
             memory_plan[tensor_id] = region;
-            planner.track(tensor_id, region, lifetime.end_node_exclusive);
             max_alignment = @max(max_alignment, alignment);
+            allocation_id = next_start[tensor_id];
         }
     }
 

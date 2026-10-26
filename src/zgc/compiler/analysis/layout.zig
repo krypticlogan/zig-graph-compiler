@@ -1,3 +1,4 @@
+const Set = @import("../node_set.zig").Set;
 const std = @import("std");
 const Graph = @import("../../core/graph.zig");
 const Semantic = @import("../../operations/semantic.zig");
@@ -33,7 +34,7 @@ pub fn LayoutResult(comptime max_rank: usize) type {
 pub fn LayoutGroup(comptime capacity: Graph.Capacity) type {
     return struct {
         anchor_tensor: Tensor.Id,
-        tensors: [capacity.max_tensors]bool = @splat(false),
+        tensors: Set(capacity.max_tensors) = .{},
         tensor_count: usize = 0,
     };
 }
@@ -42,7 +43,7 @@ pub fn LayoutSelection(comptime capacity: Graph.Capacity) type {
     return struct {
         results: [capacity.max_tensors]?LayoutResult(capacity.max_rank) = @splat(null),
         tensor_region: [capacity.max_tensors]?usize = @splat(null),
-        groups: [capacity.max_tensors]?LayoutGroup(capacity) = @splat(null),
+        groups: [capacity.max_tensors]?*const LayoutGroup(capacity) = @splat(null),
         region_count: usize = 0,
     };
 }
@@ -81,7 +82,7 @@ pub fn LayoutAnalysis(comptime capacity: Graph.Capacity) type {
             }
             const unpacked = propagate(semantic_graph, analysis, false);
             const unpacked_selection = partitionChanges(semantic_graph, unpacked);
-            if (unpacked_selection.region_count != 0 and !std.meta.eql(unpacked_selection, selection)) {
+            if (unpacked_selection.region_count != 0 and !std.meta.eql(unpacked_selection.results, selection.results)) {
                 candidates.add(.{ .regime = .unpacked, .regions = unpacked_selection });
             }
             return candidates;
@@ -91,6 +92,7 @@ pub fn LayoutAnalysis(comptime capacity: Graph.Capacity) type {
             comptime semantic_graph: SemanticGraph,
             comptime selection: LayoutSelection(capacity),
         ) SemanticGraph {
+            if (selection.region_count == 0) return semantic_graph;
             var graph = semantic_graph;
             for (selection.results[0..semantic_graph.tensor_ct], 0..) |maybe_result, tensor_id| {
                 if (maybe_result) |result| {
@@ -116,27 +118,26 @@ pub fn LayoutAnalysis(comptime capacity: Graph.Capacity) type {
                 }
             }
 
-            var assigned: [capacity.max_tensors]bool = @splat(false);
-            for (0..canonical.tensor_ct) |anchor| {
-                if (!changed[anchor] or assigned[anchor]) continue;
-                const region_id = selection.region_count;
-                var group: LayoutGroup(capacity) = .{ .anchor_tensor = anchor };
-                const storage_tensor = propagated.tensors[anchor].?.storage_tensor;
-
-                // A layout belongs to one physical storage object. Alias
-                // views must move with their storage root, while distinct
-                // owned tensors remain independently selectable even when a
-                // compute operation connects them.
-                for (0..canonical.tensor_ct) |tensor_id| {
-                    if (!changed[tensor_id] or assigned[tensor_id]) continue;
-                    if (propagated.tensors[tensor_id].?.storage_tensor != storage_tensor) continue;
-                    assigned[tensor_id] = true;
-                    group.tensors[tensor_id] = true;
-                    group.tensor_count += 1;
-                    selection.tensor_region[tensor_id] = region_id;
-                }
-                selection.groups[region_id] = group;
-                selection.region_count += 1;
+            var groups: [capacity.max_tensors]?LayoutGroup(capacity) = @splat(null);
+            var storage_region: [capacity.max_tensors]?usize = @splat(null);
+            for (0..canonical.tensor_ct) |tensor_id| {
+                if (!changed[tensor_id]) continue;
+                const storage_tensor = propagated.tensors[tensor_id].?.storage_tensor;
+                const region_id = storage_region[storage_tensor] orelse blk: {
+                    const id = selection.region_count;
+                    storage_region[storage_tensor] = id;
+                    groups[id] = .{ .anchor_tensor = tensor_id };
+                    selection.region_count += 1;
+                    break :blk id;
+                };
+                const group = &groups[region_id].?;
+                group.tensors.set(tensor_id);
+                group.tensor_count += 1;
+                selection.tensor_region[tensor_id] = region_id;
+            }
+            for (0..selection.region_count) |region_id| {
+                const frozen = groups[region_id].?;
+                selection.groups[region_id] = &frozen;
             }
             return selection;
         }

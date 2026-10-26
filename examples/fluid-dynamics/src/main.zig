@@ -15,7 +15,6 @@ const smoke_weights = [5]f32{ 1.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0, 1.0 / 
 const cx = [9]f32{ 0, 1, 0, -1, 0, 1, -1, -1, 1 };
 const cy = [9]f32{ 0, 0, 1, 0, -1, 1, 1, -1, -1 };
 const Field = enum { speed, density };
-const View = enum { smoke, data };
 
 pub fn main() void {
     rl.setTraceLogLevel(.err);
@@ -27,24 +26,23 @@ pub fn main() void {
     runtime.copySource(.cx, &cx) catch unreachable;
     runtime.copySource(.cy, &cy) catch unreachable;
     runtime.copySource(.fluid_weights, &fluid_weights) catch unreachable;
-    runtime.copySource(.smoke_weights, &smoke_weights) catch unreachable;
+    // runtime.copySource(.smoke_weights, &smoke_weights) catch unreachable;
 
     var populations: [population_count]f32 = undefined;
-    var smoke_populations: [smoke_population_count]f32 = @splat(0);
-    var smoke_injection: [cell_count]f32 = undefined;
+    // var smoke_populations: [smoke_population_count]f32 = @splat(0);
+    // var smoke_injection: [cell_count]f32 = undefined;
     var force_x: [cell_count]f32 = @splat(0);
     var force_y: [cell_count]f32 = @splat(0);
     seedVortices(&populations);
-    seedSmokeEmitter(&smoke_injection);
+    // seedSmokeEmitter(&smoke_injection);
     var omega: f32 = 1.0;
-    const smoke_omega: f32 = 1.2;
-    const smoke_retention: f32 = 0.997;
-    advance(&runtime, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
+    // const smoke_omega: f32 = 1.2;
+    // const smoke_retention: f32 = 0.997;
+    advance(&runtime, &populations, &force_x, &force_y, omega);
 
     var running = true;
     var step_count: u64 = 1;
     var field: Field = .speed;
-    var view: View = .smoke;
     var show_vectors = false;
     var previous_mouse = rl.getMousePosition();
     var was_dragging = false;
@@ -53,41 +51,36 @@ pub fn main() void {
         updateForces(&force_x, &force_y, &previous_mouse, &was_dragging);
         if (rl.isKeyPressed(.space)) running = !running;
         if (rl.isKeyPressed(.v)) field = if (field == .speed) .density else .speed;
-        if (rl.isKeyPressed(.p)) view = if (view == .smoke) .data else .smoke;
+        // if (rl.isKeyPressed(.p)) view = if (view == .smoke) .data else .smoke;
         if (rl.isKeyPressed(.a)) show_vectors = !show_vectors;
         if (rl.isKeyPressed(.left_bracket)) omega = std.math.clamp(omega - 0.05, 0.6, 1.7);
         if (rl.isKeyPressed(.right_bracket)) omega = std.math.clamp(omega + 0.05, 0.6, 1.7);
         if (rl.isKeyPressed(.r)) {
             seedVortices(&populations);
-            smoke_populations = @splat(0);
+            // smoke_populations = @splat(0);
             force_x = @splat(0);
             force_y = @splat(0);
-            advance(&runtime, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
+            advance(&runtime, &populations, &force_x, &force_y, omega);
             step_count = 1;
         } else if (rl.isKeyPressed(.n)) {
-            advance(&runtime, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
+            advance(&runtime, &populations, &force_x, &force_y, omega);
             step_count += 1;
             running = false;
         } else if (running) {
-            advance(&runtime, &populations, &smoke_populations, &smoke_injection, &force_x, &force_y, omega, smoke_omega, smoke_retention);
+            advance(&runtime, &populations, &force_x, &force_y, omega);
             step_count += 1;
         }
 
-        const smoke = runtime.outputView(2).contiguousSlice().?;
-        const density = runtime.outputView(3).contiguousSlice().?;
-        const velocity_x = runtime.outputView(4).contiguousSlice().?;
-        const velocity_y = runtime.outputView(5).contiguousSlice().?;
+        // const smoke = runtime.outputView(2).contiguousSlice().?;
+        const density = runtime.outputView(1).contiguousSlice().?;
+        const velocity_x = runtime.outputView(2).contiguousSlice().?;
+        const velocity_y = runtime.outputView(3).contiguousSlice().?;
 
         rl.beginDrawing();
         defer rl.endDrawing();
         rl.clearBackground(rl.Color.init(10, 15, 23, 255));
-        drawHeader(running, step_count, view, field, show_vectors, omega);
-        switch (view) {
-            .smoke => drawSmoke(smoke),
-            .data => {
-                drawField(field, density, velocity_x, velocity_y);
-            },
-        }
+        drawHeader(running, step_count, field, show_vectors, omega);
+        drawField(field, density, velocity_x, velocity_y);
         if (show_vectors) drawVectors(velocity_x, velocity_y);
     }
 }
@@ -95,25 +88,25 @@ pub fn main() void {
 fn advance(
     runtime: *fluid.FluidSmokeStep.Runtime,
     populations: *[population_count]f32,
-    smoke_populations: *[smoke_population_count]f32,
-    smoke_injection: *const [cell_count]f32,
+    // smoke_populations: *[smoke_population_count]f32,
+    // smoke_injection: *const [cell_count]f32,
     force_x: *const [cell_count]f32,
     force_y: *const [cell_count]f32,
     omega: f32,
-    smoke_omega: f32,
-    smoke_retention: f32,
+    // smoke_omega: f32,
+    // smoke_retention: f32,
 ) void {
     runtime.copyInput(.f, populations) catch unreachable;
-    runtime.copyInput(.smoke_g, smoke_populations) catch unreachable;
-    runtime.copyInput(.smoke_injection, smoke_injection) catch unreachable;
+    // runtime.copyInput(.smoke_g, smoke_populations) catch unreachable;
+    // runtime.copyInput(.smoke_injection, smoke_injection) catch unreachable;
     runtime.copyInput(.force_x, force_x) catch unreachable;
     runtime.copyInput(.force_y, force_y) catch unreachable;
     runtime.copyInput(.omega, &.{omega}) catch unreachable;
-    runtime.copyInput(.smoke_omega, &.{smoke_omega}) catch unreachable;
-    runtime.copyInput(.smoke_retention, &.{smoke_retention}) catch unreachable;
+    // runtime.copyInput(.smoke_omega, &.{smoke_omega}) catch unreachable;
+    // runtime.copyInput(.smoke_retention, &.{smoke_retention}) catch unreachable;
     runtime.run();
     @memcpy(populations, runtime.outputView(0).contiguousSlice().?);
-    @memcpy(smoke_populations, runtime.outputView(1).contiguousSlice().?);
+    // @memcpy(smoke_populations, runtime.outputView(1).contiguousSlice().?);
 }
 
 fn updateForces(
@@ -205,17 +198,16 @@ fn seedSmokeEmitter(injection: *[cell_count]f32) void {
     }
 }
 
-fn drawHeader(running: bool, step_count: u64, view: View, field: Field, show_vectors: bool, omega: f32) void {
+fn drawHeader(running: bool, step_count: u64, field: Field, show_vectors: bool, omega: f32) void {
     rl.drawRectangle(0, 0, screen_width, header_height, rl.Color.init(22, 30, 42, 255));
     rl.drawText("D2Q9 lattice Boltzmann", 16, 8, 24, .ray_white);
     rl.drawText("Space: pause  N: step  R: reset  P: smoke/data", 16, 65, 16, .light_gray);
     rl.drawText("V: speed/density  A: vectors  Drag: stir  [ / ]: omega", 16, 88, 16, .light_gray);
 
     var status_buffer: [128]u8 = undefined;
-    const status = std.mem.printSentinel(&status_buffer, "{s}  step {d}  {s}  {s}  vectors {s}  omega {d:.2}", .{
+    const status = std.mem.printSentinel(&status_buffer, "{s}  step {d}  {s}  vectors {s}  omega {d:.2}", .{
         if (running) "running" else "paused",
         step_count,
-        if (view == .smoke) "smoke" else "data",
         if (field == .speed) "speed" else "density",
         if (show_vectors) "on" else "off",
         omega,

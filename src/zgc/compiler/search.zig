@@ -1,4 +1,6 @@
+const Set = @import("node_set.zig").Set;
 const std = @import("std");
+const Diagnostics = @import("diagnostics.zig");
 const Execution = @import("../execution/execution.zig");
 const ProgramFactory = @import("../execution/program.zig").Program;
 const Graph = @import("../core/graph.zig");
@@ -13,11 +15,23 @@ const validation = @import("validation.zig");
 const Planning = @import("planning/root.zig");
 const Contraction = @import("planning/contraction.zig");
 
+/// Limits search work, not graph construction, analysis, or final compilation.
+pub const Options = struct {
+    /// Includes reference executables and every completed schedule variant.
+    max_executables: usize = 128,
+    /// Counts attempted local branches, including conflicts and duplicates.
+    /// The baseline and one greedy compatible anchor are seeded separately.
+    max_composition_attempts: usize = 1024,
+};
+
 pub fn SearchResult(comptime capacity: Graph.Capacity) type {
     return struct {
         reference: PlanCandidate(capacity),
         frontier: CandidateSet(capacity),
         generated_count: usize,
+        composition_attempts: usize,
+        composition_limit_reached: bool,
+        executable_limit_reached: bool,
         representation_candidate_count: usize,
         fusion_candidate_count: usize,
         layout_candidate_count: usize,
@@ -26,7 +40,7 @@ pub fn SearchResult(comptime capacity: Graph.Capacity) type {
         generated_contraction_strategies: [4]bool,
 
         pub fn selected(comptime result: @This(), comptime options: SelectionOptions) PlanCandidate(capacity) {
-            return result.frontier.candidates[result.selectedIndex(options)].?;
+            return result.frontier.candidates[result.selectedIndex(options)].?.*;
         }
 
         pub fn selectedIndex(comptime result: @This(), comptime options: SelectionOptions) usize {
@@ -194,15 +208,15 @@ pub const PlanCost = struct {
 
 pub const Origin = enum { reference, planned };
 pub const max_candidates = 16;
-pub const OptimizationTarget = enum { 
-        /// Balance runtime work, memory traffic, and code size.
-        balanced, 
-        /// Minimize peak memory usage, including scratch and persistent allocations.
-        memory, 
-        /// Minimize estimated runtime work, including arithmetic, access, and transfer.
-        fast, 
-        /// Minimize code size, including instruction bytes and conversion overhead.
-        small 
+pub const OptimizationTarget = enum {
+    /// Balance runtime work, memory traffic, and code size.
+    balanced,
+    /// Minimize peak memory usage, including scratch and persistent allocations.
+    memory,
+    /// Minimize estimated runtime work, including arithmetic, access, and transfer.
+    fast,
+    /// Minimize code size, including instruction bytes and conversion overhead.
+    small,
 };
 pub const SelectionOptions = struct {
     target: OptimizationTarget = .balanced,
@@ -227,15 +241,17 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
         const Self = @This();
         pub const Candidate = PlanCandidate(capacity);
 
-        candidates: [max_candidates]?Candidate = @splat(null),
+        candidates: [max_candidates]?*const Candidate = @splat(null),
         count: usize = 0,
 
         /// Retain distinct executables, including dominated ones that users
         /// may force for measurement. Once full, preserve each target's best
         /// candidate and evict the weakest remaining balanced candidate.
-        pub fn insert(set: *Self, candidate: Candidate) void {
+        pub fn insert(set: *Self, proposed: Candidate) void {
+            const retained = proposed;
+            const candidate = &retained;
             for (set.candidates[0..set.count], 0..) |existing, index| {
-                if (sameExecutable(existing.?.executable, candidate.executable)) {
+                if (sameExecutable(&existing.?.executable, &candidate.executable)) {
                     if (candidate.cost.preferredTo(existing.?.cost) or
                         (costsEqual(candidate.cost, existing.?.cost) and tieBreak(candidate, existing.?)))
                     {
@@ -246,7 +262,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
             }
 
             if (set.count == max_candidates) {
-                var pool: [max_candidates + 1]?Candidate = undefined;
+                var pool: [max_candidates + 1]?*const Candidate = undefined;
                 @memcpy(pool[0..max_candidates], &set.candidates);
                 pool[max_candidates] = candidate;
                 var protected: [max_candidates + 1]bool = @splat(false);
@@ -273,7 +289,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
             return bestOf(set.candidates[0..set.count], target);
         }
 
-        fn bestOf(comptime entries: []const ?Candidate, comptime target: OptimizationTarget) usize {
+        fn bestOf(comptime entries: []const ?*const Candidate, comptime target: OptimizationTarget) usize {
             const bounds = minima(entries);
             var best_index: usize = 0;
             for (1..entries.len) |index| {
@@ -284,7 +300,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
 
         const Minima = struct { work: u128, peak: usize, code: usize };
 
-        fn minima(comptime entries: []const ?Candidate) Minima {
+        fn minima(comptime entries: []const ?*const Candidate) Minima {
             var result: Minima = .{
                 .work = entries[0].?.cost.estimated_runtime_work,
                 .peak = entries[0].?.cost.peak_memory_bytes,
@@ -309,7 +325,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
                 @as(f64, @floatFromInt(@max(baseline, 1)));
         }
 
-        fn better(candidate: Candidate, current: Candidate, target: OptimizationTarget, bounds: Minima) bool {
+        fn better(candidate: *const Candidate, current: *const Candidate, target: OptimizationTarget, bounds: Minima) bool {
             switch (target) {
                 .balanced => {
                     const candidate_score = balancedScore(candidate.cost, bounds);
@@ -336,7 +352,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
             return !lhs.preferredTo(rhs) and !rhs.preferredTo(lhs);
         }
 
-        fn sameExecutable(lhs: ProgramFactory(capacity, Execution.Op), rhs: ProgramFactory(capacity, Execution.Op)) bool {
+        fn sameExecutable(lhs: *const ProgramFactory(capacity, Execution.Op), rhs: *const ProgramFactory(capacity, Execution.Op)) bool {
             if (lhs.node_ct != rhs.node_ct or lhs.tensor_ct != rhs.tensor_ct or
                 lhs.input_ref_ct != rhs.input_ref_ct or lhs.output_ref_ct != rhs.output_ref_ct or
                 lhs.output_ct != rhs.output_ct) return false;
@@ -352,7 +368,7 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
             return std.mem.eql(bool, lhs.materialized[0..lhs.tensor_ct], rhs.materialized[0..rhs.tensor_ct]);
         }
 
-        fn tieBreak(candidate: Candidate, current: Candidate) bool {
+        fn tieBreak(candidate: *const Candidate, current: *const Candidate) bool {
             if (@backingInt(candidate.schedule) != @backingInt(current.schedule)) {
                 return @backingInt(candidate.schedule) < @backingInt(current.schedule);
             }
@@ -412,30 +428,30 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             layout_regions: Analysis.LayoutSelection(capacity) = .{},
             remap_regions: Analysis.RemapSelection(capacity.max_nodes) = .{},
             contraction_strategies: [capacity.max_nodes]?Contraction.Plan.Strategy = @splat(null),
-            claimed_nodes: [capacity.max_nodes]bool = @splat(false),
+            claimed_nodes: Set(capacity.max_nodes) = .{},
+            claimed_tensors: Set(capacity.max_tensors) = .{},
             selected_nodes: usize = 0,
             selected_tensors: usize = 0,
             selected_regions: usize = 0,
             selected_policies: usize = 0,
             local_cost: Analysis.LocalCost.Estimate = .{},
 
-            fn fusionRegime(representation: @This()) Analysis.FusionRegime {
+            fn fusionRegime(representation: *const @This()) Analysis.FusionRegime {
                 if (representation.fusion_regions.map_count != 0) return .discovered;
                 for (representation.fusion_regions.reduction_storage[0..representation.fusion_regions.region_count]) |maybe_group| {
                     const group = maybe_group.?;
                     if (group.reduction_count > 1) return .discovered;
-                    for (group.nodes) |folded| {
-                        if (folded) return .discovered;
-                    }
+                    var folded = group.nodes.iterator();
+                    if (folded.next() != null) return .discovered;
                 }
                 return if (representation.fusion_regions.region_count == 0) .unfused else .independent;
             }
 
-            fn remapRegime(representation: @This()) Analysis.RemapRegime {
+            fn remapRegime(representation: *const @This()) Analysis.RemapRegime {
                 return if (representation.remap_regions.region_count != 0) .composed else .direct;
             }
 
-            fn layoutRegime(representation: @This(), comptime candidates: LayoutCandidates) Analysis.LayoutRegime {
+            fn layoutRegime(representation: *const @This(), comptime candidates: LayoutCandidates) Analysis.LayoutRegime {
                 if (representation.layout_regions.region_count == 0) return .canonical;
                 for (1..candidates.count) |index| {
                     const candidate = candidates.values[index].?;
@@ -453,26 +469,54 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
         };
 
         const RepresentationSet = struct {
-            values: [max_representation_candidates]?Representation = @splat(null),
+            values: [max_representation_candidates]?*const Representation = @splat(null),
             count: usize = 0,
             protected_count: usize = 1,
+            attempts: usize = 0,
+            attempt_limit: usize = 1024,
+
+            fn tryBranch(set: *@This()) bool {
+                if (set.attempts >= set.attempt_limit) return false;
+                set.attempts += 1;
+                return true;
+            }
 
             fn init() @This() {
                 var result: @This() = .{};
-                result.values[0] = .{};
+                const baseline: Representation = .{};
+                result.values[0] = &baseline;
                 result.count = 1;
                 return result;
             }
 
-            fn insert(set: *@This(), comptime graph: anytype, proposed: Representation) void {
-                var candidate = proposed;
-                const layout_graph = Analysis.LayoutAnalysis(capacity).applySelection(graph, candidate.layout_regions);
-                candidate.local_cost = Analysis.LocalCost.estimate(capacity, layout_graph, candidate);
-                for (set.values[0..set.count]) |existing| {
-                    if (sameRepresentation(existing.?, candidate)) return;
+            fn generationOrder(set: *const @This()) [max_representation_candidates]usize {
+                var order: [max_representation_candidates]usize = @splat(0);
+                const anchored = set.protected_count > 1;
+                order[0] = if (anchored) 1 else 0;
+                var count: usize = 1;
+                for ((if (anchored) @as(usize, 2) else @as(usize, 1))..set.count) |index| {
+                    var destination = count;
+                    while (destination > 1 and locallyBetter(set.values[index].?, set.values[order[destination - 1]].?)) : (destination -= 1) {
+                        order[destination] = order[destination - 1];
+                    }
+                    order[destination] = index;
+                    count += 1;
                 }
+                if (anchored) order[count] = 0;
+                return order;
+            }
+
+            fn insert(set: *@This(), comptime graph: anytype, proposed: *const Representation) void {
+                var candidate = proposed.*;
+                for (set.values[0..set.count]) |existing| {
+                    if (sameRepresentation(existing.?, &candidate)) return;
+                }
+                // Reject duplicates before rebuilding layouts and estimating cost.
+                _ = graph;
+                candidate.local_cost = Analysis.LocalCost.finish(candidate.local_cost);
+                const retained = candidate;
                 if (set.count < max_representation_candidates) {
-                    set.values[set.count] = candidate;
+                    set.values[set.count] = &retained;
                     set.count += 1;
                     return;
                 }
@@ -480,10 +524,10 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 // Keep the baseline and the broad anchor. Compare partial
                 // states within a policy class first, so a scalar contraction
                 // or an unfused layout is not displaced solely by coverage.
-                const candidate_class = policyClass(candidate);
+                const candidate_class = policyClass(&candidate);
                 for (set.values[set.protected_count..set.count], set.protected_count..) |value, index| {
-                    if (policyClass(value.?) != candidate_class or !sameBoundary(value.?, candidate)) continue;
-                    if (locallyBetter(candidate, value.?)) set.values[index] = candidate;
+                    if (policyClass(value.?) != candidate_class or !sameBoundary(value.?, &candidate)) continue;
+                    if (locallyBetter(&candidate, value.?)) set.values[index] = &retained;
                     return;
                 }
                 var worst_index: ?usize = null;
@@ -506,8 +550,8 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                     }
                 }
                 if (worst_index) |index| {
-                    if (policyClass(set.values[index].?) != candidate_class or locallyBetter(candidate, set.values[index].?)) {
-                        set.values[index] = candidate;
+                    if (policyClass(set.values[index].?) != candidate_class or locallyBetter(&candidate, set.values[index].?)) {
+                        set.values[index] = &retained;
                     }
                 }
             }
@@ -523,11 +567,23 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             comptime contraction_candidates: Analysis.ContractionCandidates(capacity),
             comptime source_configuration: anytype,
             comptime output_binding: Output.Binding,
+            comptime diagnostics: Diagnostics.Options,
+            comptime options: Options,
         ) Result {
-            const representations = composeRepresentations(SemanticValidated.graph, fusion_candidates, layout_candidates, remap_candidates, contraction_candidates);
+            if (options.max_executables == 0) @compileError("search.max_executables must be at least one");
+            const Trace = Diagnostics.Trace(diagnostics);
+            const masked_fusion_required = comptime requiresMaskedFusion(SemanticValidated.graph, semantic_analysis);
+            Trace.begin(.search_composition);
+            const representations = if (options.max_executables == 1 and !masked_fusion_required)
+                RepresentationSet.init()
+            else
+                composeRepresentationsWithOptions(SemanticValidated.graph, fusion_candidates, layout_candidates, remap_candidates, contraction_candidates, options);
+            Trace.end(.search_composition, .{ .representations = representations.count, .attempts = representations.attempts, .limit_reached = representations.attempts >= options.max_composition_attempts, .state_bytes = @sizeOf(Representation), .set_bytes = @sizeOf(RepresentationSet) });
             var result: Result = undefined;
             result.frontier = .{};
             result.generated_count = 0;
+            result.composition_attempts = representations.attempts;
+            result.composition_limit_reached = representations.attempts >= options.max_composition_attempts;
             result.representation_candidate_count = representations.count;
             result.fusion_candidate_count = fusion_candidates.count;
             result.layout_candidate_count = layout_candidates.count;
@@ -535,12 +591,21 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             result.contraction_candidate_count = contraction_candidates.count;
             result.generated_contraction_strategies = @splat(false);
 
-            const masked_fusion_required = comptime requiresMaskedFusion(SemanticValidated.graph, semantic_analysis);
-
-            const reference_schedules = Scheduling.Scheduling(capacity).enumerate(SemanticValidated.graph);
+            Trace.begin(.search_reference);
             if (!masked_fusion_required) {
+                Trace.begin(.reference_scheduling);
+                const reference_schedules = Scheduling.Scheduling(capacity).enumerateWithDependenciesLimited(
+                    SemanticValidated.graph,
+                    semantic_analysis.dependencies,
+                    @min(3, @max(1, options.max_executables - 1)),
+                );
+                Trace.end(.reference_scheduling, .{ .schedules = reference_schedules.len });
                 inline for (reference_schedules, 0..) |schedule, schedule_index| {
+                    // Reserve a slot for the greedy optimized anchor when capped.
+                    if (result.generated_count >= @max(1, options.max_executables - 1)) break;
+                    Trace.begin(.reference_construction);
                     const executable = Scheduling.Reference(capacity).plan(SemanticValidated.graph, schedule);
+                    Trace.end(.reference_construction, .{ .nodes = executable.node_ct, .program_bytes = @sizeOf(@TypeOf(executable)) });
                     const candidate = complete(
                         SourceKey,
                         executable,
@@ -551,6 +616,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                         schedule.kind,
                         source_configuration,
                         output_binding,
+                        diagnostics,
                     );
                     if (schedule_index == 0) result.reference = candidate;
                     result.frontier.insert(candidate);
@@ -558,14 +624,24 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 }
             }
 
-            inline for (0..representations.count) |representation_index| {
+            Trace.end(.search_reference, .{ .generated = result.generated_count, .masked_fusion_required = masked_fusion_required, .frontier_bytes = @sizeOf(@TypeOf(result.frontier)) });
+
+            const generation_order = representations.generationOrder();
+            inline for (generation_order[0..representations.count]) |representation_index| {
+                if (result.generated_count >= options.max_executables) break;
+                // The compatible anchor goes first, then locally ranked alternatives.
                 const representation = representations.values[representation_index].?;
                 if (masked_fusion_required and !respectsMaskedFusion(SemanticValidated.graph, semantic_analysis, representation.fusion_regions)) continue;
+                Trace.begin(.search_layout);
                 const layout_graph = Analysis.LayoutAnalysis(capacity).applySelection(
                     SemanticValidated.graph,
                     representation.layout_regions,
                 );
+                Trace.end(.search_layout, .{ .representation = representation_index, .nodes = layout_graph.node_ct });
+                Trace.begin(.search_validation);
                 const LayoutValidated = validation.Validation(capacity).validate(layout_graph);
+                Trace.end(.search_validation, .{ .representation = representation_index, .nodes = LayoutValidated.graph.node_ct });
+                Trace.begin(.search_lowering);
                 const base_executable = Planning.Lowering(capacity).lower(
                     LayoutValidated.graph,
                     semantic_analysis.dependencies.topological_order,
@@ -573,6 +649,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                     representation.remap_regions,
                     representation.contraction_strategies,
                 );
+                Trace.end(.search_lowering, .{ .representation = representation_index, .nodes = base_executable.node_ct });
                 for (base_executable.nodes[0..base_executable.node_ct]) |maybe_node| {
                     const node = maybe_node.?;
                     const compute = switch (node.op) {
@@ -588,8 +665,11 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                         else => {},
                     }
                 }
-                const schedules = Scheduling.ExecutableScheduling(capacity).enumerate(base_executable);
+                Trace.begin(.search_scheduling);
+                const schedules = Scheduling.ExecutableScheduling(capacity).enumerateLimited(base_executable, @min(3, options.max_executables - result.generated_count));
+                Trace.end(.search_scheduling, .{ .representation = representation_index, .schedules = schedules.len });
                 inline for (schedules) |schedule| {
+                    if (result.generated_count >= options.max_executables) break;
                     const executable = Scheduling.ExecutableScheduling(capacity).apply(base_executable, schedule);
                     const candidate = complete(
                         SourceKey,
@@ -601,6 +681,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                         schedule.kind,
                         source_configuration,
                         output_binding,
+                        diagnostics,
                     );
                     if (result.generated_count == 0) result.reference = candidate;
                     result.frontier.insert(candidate);
@@ -608,6 +689,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 }
             }
 
+            result.executable_limit_reached = result.generated_count >= options.max_executables;
             return result;
         }
 
@@ -653,14 +735,26 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             return true;
         }
 
-        fn composeRepresentations(
+        pub fn composeRepresentations(
             comptime semantic_graph: Graph.Graph(capacity, @import("../operations/semantic.zig").Op),
             comptime fusion_candidates: FusionCandidates,
             comptime layout_candidates: LayoutCandidates,
             comptime remap_candidates: RemapCandidates,
             comptime contraction_candidates: Analysis.ContractionCandidates(capacity),
         ) RepresentationSet {
+            return composeRepresentationsWithOptions(semantic_graph, fusion_candidates, layout_candidates, remap_candidates, contraction_candidates, .{});
+        }
+
+        pub fn composeRepresentationsWithOptions(
+            comptime semantic_graph: Graph.Graph(capacity, @import("../operations/semantic.zig").Op),
+            comptime fusion_candidates: FusionCandidates,
+            comptime layout_candidates: LayoutCandidates,
+            comptime remap_candidates: RemapCandidates,
+            comptime contraction_candidates: Analysis.ContractionCandidates(capacity),
+            comptime options: Options,
+        ) RepresentationSet {
             var representations = RepresentationSet.init();
+            representations.attempt_limit = options.max_composition_attempts;
 
             // Preserve one maximally compatible anchor before bounded local
             // branching. It represents the coherent set discovered by the
@@ -677,50 +771,60 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 const selection = fusion_candidates.values[candidate_index].?.regions;
                 inline for (0..selection.region_count) |region_id| {
                     if (hasReductionRegion(selection, region_id)) {
-                        _ = claimFusionRegion(&anchor, selection, .{ .reduction = region_id });
+                        _ = claimFusionRegion(semantic_graph, &anchor, selection, .{ .reduction = region_id });
                     }
                 }
                 inline for (0..selection.map_count) |map_id| {
-                    _ = claimFusionRegion(&anchor, selection, .{ .map = map_id });
+                    _ = claimFusionRegion(semantic_graph, &anchor, selection, .{ .map = map_id });
                 }
             }
             inline for (1..remap_candidates.count) |candidate_index| {
                 const selection = remap_candidates.values[candidate_index].?.regions;
                 inline for (0..selection.region_count) |region_id| {
-                    _ = claimRemapRegion(&anchor, selection, region_id);
+                    _ = claimRemapRegion(semantic_graph, &anchor, selection, region_id);
                 }
             }
             if (anchor.selected_regions != 0) {
-                representations.insert(semantic_graph, anchor);
+                representations.insert(semantic_graph, &anchor);
                 representations.protected_count = representations.count;
             }
 
             inline for (1..layout_candidates.count) |candidate_index| {
                 const selection = layout_candidates.values[candidate_index].?.regions;
                 inline for (0..selection.region_count) |region_id| {
+                    if (representations.attempts >= representations.attempt_limit) return representations;
                     branchLayout(&representations, semantic_graph, selection, region_id);
+                    if (representations.attempts >= representations.attempt_limit) return representations;
                 }
             }
 
             inline for (0..contraction_candidates.count) |candidate_index| {
+                if (representations.attempts >= representations.attempt_limit) return representations;
                 branchContraction(&representations, semantic_graph, contraction_candidates.values[candidate_index].?);
+                if (representations.attempts >= representations.attempt_limit) return representations;
             }
 
             inline for (1..fusion_candidates.count) |candidate_index| {
                 const selection = fusion_candidates.values[candidate_index].?.regions;
                 inline for (0..selection.region_count) |region_id| {
                     if (!hasReductionRegion(selection, region_id)) continue;
+                    if (representations.attempts >= representations.attempt_limit) return representations;
                     branchReduction(&representations, semantic_graph, selection, region_id);
+                    if (representations.attempts >= representations.attempt_limit) return representations;
                 }
                 inline for (0..selection.map_count) |map_id| {
+                    if (representations.attempts >= representations.attempt_limit) return representations;
                     branchMap(&representations, semantic_graph, selection, map_id);
+                    if (representations.attempts >= representations.attempt_limit) return representations;
                 }
             }
 
             inline for (1..remap_candidates.count) |candidate_index| {
                 const selection = remap_candidates.values[candidate_index].?.regions;
                 inline for (0..selection.region_count) |region_id| {
+                    if (representations.attempts >= representations.attempt_limit) return representations;
                     branchRemap(&representations, semantic_graph, selection, region_id);
+                    if (representations.attempts >= representations.attempt_limit) return representations;
                 }
             }
             return representations;
@@ -733,19 +837,31 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
         ) void {
             const existing = representations.*;
             for (existing.values[0..existing.count]) |value| {
-                var candidate = value.?;
-                if (candidate.contraction_strategies[policy.node] != null) continue;
-                const graph = Analysis.LayoutAnalysis(capacity).applySelection(semantic_graph, candidate.layout_regions);
-                const node = graph.nodes[policy.node].?;
-                const lhs = graph.tensors[graph.input_refs[node.input_start].?].?;
-                const rhs = graph.tensors[graph.input_refs[node.input_start + 1].?].?;
-                const output = graph.tensors[node.result].?;
+                if (!representations.tryBranch()) return;
+                const existing_candidate = value.?;
+                if (existing_candidate.contraction_strategies[policy.node] != null) continue;
+                const node = semantic_graph.nodes[policy.node].?;
+                const lhs = selectedTensor(semantic_graph, &existing_candidate.layout_regions, semantic_graph.input_refs[node.input_start].?);
+                const rhs = selectedTensor(semantic_graph, &existing_candidate.layout_regions, semantic_graph.input_refs[node.input_start + 1].?);
+                const output = selectedTensor(semantic_graph, &existing_candidate.layout_regions, node.result);
                 if (!Contraction.supportsStrategy(lhs, rhs, output, policy.strategy)) continue;
                 if (Contraction.selectStrategy(capacity, lhs, rhs, output) == policy.strategy) continue;
+                var candidate = existing_candidate.*;
                 candidate.contraction_strategies[policy.node] = policy.strategy;
                 candidate.selected_policies += 1;
-                representations.insert(semantic_graph, candidate);
+                const estimateWork = @import("analysis/contraction.zig").estimateWork;
+                const default_strategy = Contraction.selectStrategy(capacity, lhs, rhs, output);
+                candidate.local_cost.contraction_work_delta += @as(i128, @intCast(estimateWork(lhs, rhs, policy.strategy))) -
+                    @as(i128, @intCast(estimateWork(lhs, rhs, default_strategy)));
+                representations.insert(semantic_graph, &candidate);
             }
+        }
+
+        /// Resolve only the descriptor needed for admission; do not materialize a graph.
+        fn selectedTensor(comptime graph: anytype, selection: *const Analysis.LayoutSelection(capacity), tensor_id: usize) @TypeOf(graph.tensors[0].?) {
+            var info = graph.tensors[tensor_id].?;
+            if (selection.results[tensor_id]) |result| info.layout = result.layout;
+            return info;
         }
 
         fn branchLayout(
@@ -757,9 +873,12 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             const existing = representations.*;
             var index: usize = 0;
             while (index < existing.count) : (index += 1) {
-                var candidate = existing.values[index].?;
+                if (!representations.tryBranch()) return;
+                const group = source.groups[source_region] orelse continue;
+                if (existing.values[index].?.claimed_tensors.intersects(&group.tensors)) continue;
+                var candidate = existing.values[index].?.*;
                 if (!claimLayoutRegion(&candidate, source, source_region)) continue;
-                representations.insert(semantic_graph, candidate);
+                representations.insert(semantic_graph, &candidate);
             }
         }
 
@@ -772,9 +891,12 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             const existing = representations.*;
             var index: usize = 0;
             while (index < existing.count) : (index += 1) {
-                var candidate = existing.values[index].?;
-                if (!claimFusionRegion(&candidate, source, .{ .reduction = source_region })) continue;
-                representations.insert(semantic_graph, candidate);
+                if (!representations.tryBranch()) return;
+                const mask = fusionMembers(source, .{ .reduction = source_region }) orelse continue;
+                if (existing.values[index].?.claimed_nodes.intersects(&mask)) continue;
+                var candidate = existing.values[index].?.*;
+                if (!claimFusionRegion(semantic_graph, &candidate, source, .{ .reduction = source_region })) continue;
+                representations.insert(semantic_graph, &candidate);
             }
         }
 
@@ -787,9 +909,12 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             const existing = representations.*;
             var index: usize = 0;
             while (index < existing.count) : (index += 1) {
-                var candidate = existing.values[index].?;
-                if (!claimFusionRegion(&candidate, source, .{ .map = source_region })) continue;
-                representations.insert(semantic_graph, candidate);
+                if (!representations.tryBranch()) return;
+                const mask = fusionMembers(source, .{ .map = source_region }) orelse continue;
+                if (existing.values[index].?.claimed_nodes.intersects(&mask)) continue;
+                var candidate = existing.values[index].?.*;
+                if (!claimFusionRegion(semantic_graph, &candidate, source, .{ .map = source_region })) continue;
+                representations.insert(semantic_graph, &candidate);
             }
         }
 
@@ -802,64 +927,60 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             const existing = representations.*;
             var index: usize = 0;
             while (index < existing.count) : (index += 1) {
-                var candidate = existing.values[index].?;
-                if (!claimRemapRegion(&candidate, source, source_region)) continue;
-                representations.insert(semantic_graph, candidate);
+                if (!representations.tryBranch()) return;
+                const group = source.groups[source_region] orelse continue;
+                if (existing.values[index].?.claimed_nodes.intersects(&group.nodes)) continue;
+                var candidate = existing.values[index].?.*;
+                if (!claimRemapRegion(semantic_graph, &candidate, source, source_region)) continue;
+                representations.insert(semantic_graph, &candidate);
             }
         }
 
         fn claimFusionRegion(
+            comptime semantic_graph: anytype,
             candidate: *Representation,
             comptime source: Analysis.FusionSelection(capacity.max_nodes),
             comptime source_region: Analysis.FusionRegionRef,
         ) bool {
-            var nodes: [capacity.max_nodes]bool = @splat(false);
-            var node_count: usize = 0;
-            for (source.node_region, 0..) |maybe_region, node_id| {
-                const region = maybe_region orelse continue;
-                if (!std.meta.eql(region, source_region)) continue;
-                if (candidate.claimed_nodes[node_id]) return false;
-                nodes[node_id] = true;
-                node_count += 1;
-            }
-            if (node_count == 0) return false;
+            _ = semantic_graph;
+            const nodes = fusionMembers(source, source_region) orelse return false;
+            var first = nodes.iterator();
+            if (first.next() == null or candidate.claimed_nodes.intersects(&nodes)) return false;
 
             switch (source_region) {
                 .reduction => |region_id| {
                     const group = source.reduction_storage[region_id] orelse return false;
-                    if (!nodes[group.emit_node]) return false;
+                    if (!nodes.isSet(group.emit_node)) return false;
                     for (group.reduction_nodes[0..group.reduction_count]) |maybe_node_id| {
-                        if (!nodes[maybe_node_id orelse return false]) return false;
+                        if (!nodes.isSet(maybe_node_id orelse return false)) return false;
                     }
-                    for (group.nodes, 0..) |included, node_id| {
-                        if (included and !nodes[node_id]) return false;
-                    }
+                    if (!nodes.containsAll(&group.nodes)) return false;
                     const destination = candidate.fusion_regions.region_count;
                     candidate.fusion_regions.reduction_storage[destination] = group;
-                    for (nodes, 0..) |selected, node_id| {
-                        if (selected) candidate.fusion_regions.node_region[node_id] = .{ .reduction = destination };
-                    }
+                    var members = nodes.iterator();
+                    while (members.next()) |node_id| candidate.fusion_regions.node_region[node_id] = .{ .reduction = destination };
                     candidate.fusion_regions.region_count += 1;
                 },
                 .map => |region_id| {
                     const group = source.map_storage[region_id] orelse return false;
-                    if (!nodes[group.root_node]) return false;
-                    for (group.nodes, 0..) |included, node_id| {
-                        if (included != nodes[node_id]) return false;
-                    }
+                    if (!nodes.isSet(group.root_node)) return false;
+                    if (!nodes.eql(&group.nodes)) return false;
                     const destination = candidate.fusion_regions.map_count;
                     candidate.fusion_regions.map_storage[destination] = group;
-                    for (nodes, 0..) |selected, node_id| {
-                        if (selected) candidate.fusion_regions.node_region[node_id] = .{ .map = destination };
-                    }
+                    var members = nodes.iterator();
+                    while (members.next()) |node_id| candidate.fusion_regions.node_region[node_id] = .{ .map = destination };
                     candidate.fusion_regions.map_count += 1;
                 },
             }
-            for (nodes, 0..) |selected, node_id| {
-                if (!selected) continue;
-                candidate.claimed_nodes[node_id] = true;
+            var members = nodes.iterator();
+            while (members.next()) |node_id| {
+                candidate.claimed_nodes.set(node_id);
                 candidate.selected_nodes += 1;
             }
+            candidate.local_cost.traffic_saved_bytes += switch (source_region) {
+                .map => |id| source.map_storage[id].?.traffic_saved_bytes,
+                .reduction => |id| source.reduction_storage[id].?.traffic_saved_bytes,
+            };
             candidate.selected_regions += 1;
             return true;
         }
@@ -870,11 +991,17 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             comptime source_region: usize,
         ) bool {
             const group = source.groups[source_region] orelse return false;
-            if (group.tensor_count == 0 or !group.tensors[group.anchor_tensor]) return false;
+            if (group.tensor_count == 0 or !group.tensors.isSet(group.anchor_tensor)) return false;
             const destination = candidate.layout_regions.region_count;
+            if (candidate.claimed_tensors.intersects(&group.tensors)) return false;
+            var checks = group.tensors.iterator();
+            while (checks.next()) |tensor_id| {
+                const result = source.results[tensor_id] orelse return false;
+                if (result.tensor != tensor_id) return false;
+            }
 
-            for (group.tensors, 0..) |included, tensor_id| {
-                if (!included) continue;
+            var members = group.tensors.iterator();
+            while (members.next()) |tensor_id| {
                 const result = source.results[tensor_id] orelse return false;
                 if (result.tensor != tensor_id) return false;
                 if (candidate.layout_regions.results[tensor_id] != null) return false;
@@ -882,6 +1009,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 candidate.layout_regions.tensor_region[tensor_id] = destination;
                 candidate.selected_tensors += 1;
             }
+            candidate.claimed_tensors.include(&group.tensors);
             candidate.layout_regions.groups[destination] = group;
             candidate.layout_regions.region_count += 1;
             candidate.selected_regions += 1;
@@ -889,49 +1017,46 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
         }
 
         fn claimRemapRegion(
+            comptime semantic_graph: anytype,
             candidate: *Representation,
             comptime source: Analysis.RemapSelection(capacity.max_nodes),
             comptime source_region: usize,
         ) bool {
-            var nodes: [capacity.max_nodes]bool = @splat(false);
-            var node_count: usize = 0;
-            for (source.node_region, 0..) |maybe_region, node_id| {
-                if (maybe_region != source_region) continue;
-                if (candidate.claimed_nodes[node_id]) return false;
-                nodes[node_id] = true;
-                node_count += 1;
-            }
-            if (node_count == 0) return false;
+            _ = semantic_graph;
             const group = source.groups[source_region] orelse return false;
-            if (!nodes[group.root_node]) return false;
-            for (group.nodes, 0..) |included, node_id| {
-                if (included != nodes[node_id]) return false;
-            }
+            const nodes = group.nodes;
+            var first = nodes.iterator();
+            if (first.next() == null or candidate.claimed_nodes.intersects(&nodes)) return false;
+            if (!nodes.isSet(group.root_node)) return false;
+            if (!nodes.eql(&group.nodes)) return false;
             const destination = candidate.remap_regions.region_count;
             candidate.remap_regions.groups[destination] = group;
-            for (nodes, 0..) |selected, node_id| {
-                if (!selected) continue;
+            var members = nodes.iterator();
+            while (members.next()) |node_id| {
                 candidate.remap_regions.node_region[node_id] = destination;
-                candidate.claimed_nodes[node_id] = true;
+                candidate.claimed_nodes.set(node_id);
                 candidate.selected_nodes += 1;
             }
+            candidate.local_cost.traffic_saved_bytes += group.traffic_saved_bytes;
             candidate.remap_regions.region_count += 1;
             candidate.selected_regions += 1;
             return true;
         }
 
-        fn hasReductionRegion(
-            comptime selection: Analysis.FusionSelection(capacity.max_nodes),
-            comptime region_id: usize,
-        ) bool {
-            for (selection.node_region) |maybe_region| {
-                const region = maybe_region orelse continue;
-                if (region == .reduction and region.reduction == region_id) return true;
-            }
-            return false;
+        fn fusionMembers(comptime selection: Analysis.FusionSelection(capacity.max_nodes), region: Analysis.FusionRegionRef) ?Set(capacity.max_nodes) {
+            return switch (region) {
+                .map => |id| (selection.map_storage[id] orelse return null).nodes,
+                .reduction => |id| (selection.reduction_storage[id] orelse return null).members,
+            };
         }
 
-        fn sameRepresentation(lhs: Representation, rhs: Representation) bool {
+        fn hasReductionRegion(comptime selection: Analysis.FusionSelection(capacity.max_nodes), comptime region_id: usize) bool {
+            const group = selection.reduction_storage[region_id] orelse return false;
+            var members = group.members.iterator();
+            return members.next() != null;
+        }
+
+        fn sameRepresentation(lhs: *const Representation, rhs: *const Representation) bool {
             if (lhs.selected_nodes != rhs.selected_nodes or
                 lhs.selected_tensors != rhs.selected_tensors or
                 lhs.selected_policies != rhs.selected_policies or
@@ -950,7 +1075,7 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             return std.mem.eql(?Contraction.Plan.Strategy, &lhs.contraction_strategies, &rhs.contraction_strategies);
         }
 
-        fn policyClass(candidate: Representation) u16 {
+        fn policyClass(candidate: *const Representation) u16 {
             var result: u16 = 0;
             if (candidate.layout_regions.region_count != 0) result |= 1;
             if (candidate.fusion_regions.region_count != 0) result |= 2;
@@ -963,15 +1088,15 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             return result;
         }
 
-        fn sameBoundary(lhs: Representation, rhs: Representation) bool {
-            if (!std.mem.eql(bool, &lhs.claimed_nodes, &rhs.claimed_nodes)) return false;
+        fn sameBoundary(lhs: *const Representation, rhs: *const Representation) bool {
+            if (!lhs.claimed_nodes.eql(&rhs.claimed_nodes)) return false;
             for (lhs.layout_regions.results, rhs.layout_regions.results) |left, right| {
                 if (!std.meta.eql(left, right)) return false;
             }
             return std.mem.eql(?Contraction.Plan.Strategy, &lhs.contraction_strategies, &rhs.contraction_strategies);
         }
 
-        fn locallyBetter(lhs: Representation, rhs: Representation) bool {
+        fn locallyBetter(lhs: *const Representation, rhs: *const Representation) bool {
             if (lhs.local_cost.estimated_runtime_delta != rhs.local_cost.estimated_runtime_delta) {
                 return lhs.local_cost.estimated_runtime_delta < rhs.local_cost.estimated_runtime_delta;
             }
@@ -997,18 +1122,33 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             comptime schedule: Scheduling.Kind,
             comptime source_configuration: anytype,
             comptime output_binding: Output.Binding,
+            comptime diagnostics: Diagnostics.Options,
         ) CandidateType {
+            const Trace = Diagnostics.Trace(diagnostics);
+            Trace.begin(.candidate_validation);
             const Validated = validation.FinalValidation(capacity).validate(executable);
+            Trace.end(.candidate_validation, .{ .origin = origin, .schedule = schedule, .nodes = Validated.graph.node_ct });
+            Trace.begin(.candidate_lifetimes);
             const lifetimes = LifetimeAnalysis().analyze(Validated);
+            Trace.end(.candidate_lifetimes, .{ .tensors = lifetimes.tensor_lifetimes.len });
+            Trace.begin(.candidate_sources);
             const SourcePlan = Source.Plan(SourceKey, capacity, executable, source_configuration);
+            Trace.end(.candidate_sources, .{ .plan_type_bytes = @sizeOf(SourcePlan) });
+            Trace.begin(.candidate_outputs);
             const OutputPlan = Output.Plan(executable, output_binding);
+            Trace.end(.candidate_outputs, .{ .plan_type_bytes = @sizeOf(OutputPlan) });
+            Trace.begin(.candidate_storage);
             const MemoryPlan = Storage.MemoryPlan(capacity, executable, lifetimes, SourcePlan, OutputPlan);
+            Trace.end(.candidate_storage, .{ .bytes = MemoryPlan.byte_count });
+            Trace.begin(.candidate_cost);
             const memory_traffic = estimateMemoryTraffic(executable);
             const arithmetic_work = estimateRuntime(executable);
             const access_work = estimateAccess(executable);
             const register_pressure_work = estimateRegisterPressure(executable);
             const transfer_work = memoryTransferWork(memory_traffic);
             const persistent_memory_bytes = persistentBytes(executable, lifetimes, SourcePlan, OutputPlan);
+
+            Trace.end(.candidate_cost, .{ .origin = origin, .schedule = schedule, .arithmetic = arithmetic_work, .access = access_work, .register_pressure = register_pressure_work, .transfer = transfer_work });
 
             return .{
                 .executable = executable,
@@ -1772,8 +1912,8 @@ test "program representations compose independent regions and reject overlaps" {
         candidates.values[0] = .{ .regime = .unfused, .regions = .{} };
 
         var regions: Analysis.FusionSelection(capacity.max_nodes) = .{};
-        regions.map_storage[0] = .{ .root_node = 0, .nodes = .{ true, false, false }, .node_count = 1 };
-        regions.map_storage[1] = .{ .root_node = 1, .nodes = .{ false, true, false }, .node_count = 1 };
+        regions.map_storage[0] = &.{ .root_node = 0, .nodes = Set(3).init(&.{0}), .node_count = 1 };
+        regions.map_storage[1] = &.{ .root_node = 1, .nodes = Set(3).init(&.{1}), .node_count = 1 };
         regions.node_region[0] = .{ .map = 0 };
         regions.node_region[1] = .{ .map = 1 };
         regions.map_count = 2;
@@ -1787,7 +1927,7 @@ test "program representations compose independent regions and reject overlaps" {
         candidates.values[0] = .{ .regime = .direct, .regions = .{} };
 
         var regions: Analysis.RemapSelection(capacity.max_nodes) = .{};
-        regions.groups[0] = .{ .root_node = 0, .nodes = .{ true, false, false }, .node_count = 1 };
+        regions.groups[0] = &.{ .root_node = 0, .nodes = Set(3).init(&.{0}), .node_count = 1 };
         regions.node_region[0] = 0;
         regions.region_count = 1;
         candidates.values[1] = .{ .regime = .composed, .regions = regions };
@@ -1841,8 +1981,8 @@ test "program representations compose independent layout regions" {
         regions.results[1] = .{ .tensor = 1, .layout = packed_layout };
         regions.tensor_region[0] = 0;
         regions.tensor_region[1] = 1;
-        regions.groups[0] = .{ .anchor_tensor = 0, .tensors = .{ true, false }, .tensor_count = 1 };
-        regions.groups[1] = .{ .anchor_tensor = 1, .tensors = .{ false, true }, .tensor_count = 1 };
+        regions.groups[0] = &.{ .anchor_tensor = 0, .tensors = Set(2).init(&.{0}), .tensor_count = 1 };
+        regions.groups[1] = &.{ .anchor_tensor = 1, .tensors = Set(2).init(&.{1}), .tensor_count = 1 };
         regions.region_count = 2;
         candidates.values[1] = .{ .regime = .propagated, .regions = regions };
         candidates.count = 2;

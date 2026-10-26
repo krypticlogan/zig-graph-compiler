@@ -8,6 +8,8 @@ pub const build = struct {
 };
 
 pub const compile = struct {
+    pub const SearchOptions = @import("zgc/compiler/search.zig").Options;
+    pub const Diagnostics = @import("zgc/compiler/diagnostics.zig");
     pub const executableFromZgir = @import("zgc/frontend/instantiation.zig").executableFromZgir;
     pub const executableFromZgirWithOptions = @import("zgc/frontend/instantiation.zig").executableFromZgirWithOptions;
     pub const ZgirExecutableOptions = @import("zgc/frontend/instantiation.zig").ZgirExecutableOptions;

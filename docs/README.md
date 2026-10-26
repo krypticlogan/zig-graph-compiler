@@ -14,6 +14,8 @@ Run `zig build docs` to generate the Zig API reference at
   reduction, concatenation, and structural-view contracts.
 - [Executable inspection](inspection.md) — inspect compiled libraries or render
   model representations to a writer.
+- [Compilation diagnostics](compile-diagnostics.md) — comptime stage logs,
+  checkpoints, and compiler time/memory probes.
 - [Generated model artifacts](executables.md) — opaque model lifecycle,
   versioned C ABI, libraries, and minimal executables.
 - [Serialized graphs](zgir.md) — `.zgir` syntax, operations, and compilation.

@@ -2,6 +2,30 @@ const std = @import("std");
 const zgc = @import("zgc_internal").api;
 const models = @import("fixtures/models.zig");
 
+test "simultaneous lifetime ends coalesce before the next allocation" {
+    const Executable = comptime blk: {
+        var builder = zgc.DefinitionBuilder.init();
+        const input = builder.sources(enum { input }).input(.input, .f32, &.{4});
+        const copied = builder.copy(input);
+        const negated = builder.neg(input);
+        builder.output(builder.relu(builder.add(copied, negated)));
+        break :blk builder.finish().executableWith(.{
+            .frontier_index = 0,
+            .sources = &.{.{ .source = .input, .binding = zgc.memory.Source.bound }},
+        });
+    };
+    const regions = Executable.memory_plan.tensor_regions;
+    try std.testing.expectEqual(@as(usize, 0), regions[1].?.offset);
+    try std.testing.expectEqual(@as(usize, 16), regions[2].?.offset);
+    try std.testing.expectEqual(@as(usize, 32), regions[3].?.offset);
+    try std.testing.expectEqual(@as(usize, 0), regions[4].?.offset);
+    try std.testing.expectEqual(@as(usize, 48), Executable.memory_plan.byte_count);
+    var runtime = Executable.Runtime.init();
+    try runtime.bindInput(.input, &.{ 1, -2, 3, -4 });
+    runtime.run();
+    try std.testing.expectEqualSlices(f32, &.{ 0, 0, 0, 0 }, runtime.outputView(0).contiguousSlice().?);
+}
+
 test "memory plan reuses an expired intermediate region" {
     const regions = models.ReuseExecutable.memory_plan.tensor_regions;
 

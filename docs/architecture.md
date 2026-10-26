@@ -53,6 +53,9 @@ Calling `definition.executable()` performs every stage after definition. Countin
 and compiler-analysis steps are internal implementation details and are not
 exported as public graph-building APIs.
 
+[Comptime diagnostics](compile-diagnostics.md) provide optional stage logs and
+intentional checkpoints for investigating compiler time and memory use.
+
 ## Definition
 
 `DefinitionBuilder` is the front end. Its operation
@@ -65,6 +68,16 @@ must be an enum, giving every input, parameter, or constant a stable
 compile-time index without specializing the builder itself. The builder records
 that type when the source facade is requested. Definitions without sources do
 not need to declare an empty source enum.
+
+The concrete builder appends nodes, tensors, input references, and outputs into
+64-entry chunks. Each collection keeps a writable tail and immutable completed
+chunks, so appending does not concatenate the graph's existing arrays. Each
+collection has a logical maximum of `DefinitionBuilder.max_size` (`maxInt(u32)`);
+that maximum does not reserve backing storage. Source-name tables use the same
+limit and are supplied once when sources are initialized. `finish()` flattens the
+populated entries into exact-sized definition arrays and records the maximum
+tensor rank. Builder copies can be extended independently, and later appends
+leave previously finished definitions unchanged.
 
 The public definition representation lives in `frontend/`. Completed
 definitions cross into `compiler/`, where construction produces the semantic
@@ -96,6 +109,19 @@ capacities. In particular, the graph's rank capacity is the largest rank
 actually used, rather than the definition's rank bound. Source storage uses
 direct enum indexing, so its capacity is the highest referenced source index
 plus one.
+
+After semantic optimization, finalization rebuilds the graph using its actual
+node, tensor, input-reference, output, source-slot, and rank counts. Analysis and
+search use those canonical capacities rather than the original definition's
+sizes. Source IDs remain stable, so holes below the highest live source index
+remain present. Forward provenance maps retain raw graph dimensions; reverse
+maps contain exactly the optimized node and tensor counts.
+
+Search candidates share the canonical semantic capacity while they are compared.
+After selection, the executable is finalized again, including its exact output
+reference count. `Executable.internal_capacity` describes that selected program;
+`raw_capacity` and `semantic_capacity` describe the earlier stages. Compiler
+internals inspecting `semantic_graph` should use `semantic_capacity`.
 
 Graph construction records a raw semantic graph in definition order. Compute
 results initially use canonical dense storage. View operations preserve their
@@ -336,3 +362,48 @@ axis, covering bias operations on batch-oriented matmul results. Selected
 reduction and contraction paths use SIMD. Generic view traversal handles
 offsets and positive or negative strides where the relevant kernel supports
 them.
+
+
+### Shared compiler facts and region catalogs
+
+Semantic analysis establishes dependency order and consumer edges, use/output
+facts, tensor byte sizes and storage roots, operation classifications, and
+fusion anchors once for the immutable semantic graph. Selectors reuse these
+facts. They do not substitute for physical use counts, layout-dependent
+properties, or schedule-dependent lifetimes after lowering.
+
+Fusion, layout, and remap selections reference immutable region definitions.
+Candidate copies carry region references and ownership information instead of
+embedding every possible group. Region membership uses packed bitsets with
+ascending set-bit iteration. Reduction groups keep exact-sized reduction lists;
+discovery links reductions by ID before freezing the lists. Region traffic
+contributions are computed once during analysis. Composition checks conflicts
+before cloning candidate state, and rejected branches still consume their search
+allowance. Contraction admission overlays the three relevant tensor descriptors
+instead of constructing a layout-modified graph.
+
+Reference construction, physical schedule application, and graph validation use
+ordinary comptime loops instead of explicitly expanding a separate loop body
+for every node. These changes preserve static compilation and final candidate
+costing.
+
+
+### Physical program construction and frontier ownership
+
+Reference construction, physical lowering, and non-identity schedule application
+append invocations and tensor references through a chunked program builder. A
+small producer table records changed origins; immutable tensor metadata stays
+shared until final assembly. Completed programs retain the existing concrete
+array representation. Identity schedules reuse the existing program directly.
+
+The executable frontier and its eviction pool store immutable candidate
+references. Comparisons borrow candidates/programs instead of passing full
+program values. Frontier snapshots therefore copy references and keep their
+previous candidate records intact after replacement. `selected()` still returns
+the selected candidate value; frontier entries are read-only references.
+
+Reference and physical scheduling compute only the policy prefix that fits the
+remaining executable allowance. A one-slot prefix uses the known dependency
+order without building memory-pressure or critical-path schedules. This avoids
+performing full alternate traversals before a capped search can reject them.
+The complete three-policy API and ordering remain unchanged.

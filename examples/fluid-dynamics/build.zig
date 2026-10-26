@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) !void {
     const raylib_artifact = raylib_dep.artifact("raylib");
 
     const fluid_model_mod = b.createModule(.{
-        .root_source_file = b.path("src/lbm-model.zig"),
+        .root_source_file = b.path("src/free_surface_lbm.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -28,18 +28,18 @@ pub fn build(b: *std.Build) !void {
         },
     });
 
-    const cli_module = zgc_dep.module("zgc_inspect_cli");
-    cli_module.addImport("executable", fluid_model_mod);
-    const inspector = b.addExecutable(.{
-        .name = "zgc-inspect",
-        .root_module = cli_module,
-    });
-    b.installArtifact(inspector);
+    // const cli_module = zgc_dep.module("zgc_inspect_cli");
+    // cli_module.addImport("executable", fluid_model_mod);
+    // const inspector = b.addExecutable(.{
+    //     .name = "zgc-inspect",
+    //     .root_module = cli_module,
+    // });
+    // b.installArtifact(inspector);
 
     const exe = b.addExecutable(.{
         .name = "fluid_dynamics",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("src/free_surface_viewer.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{

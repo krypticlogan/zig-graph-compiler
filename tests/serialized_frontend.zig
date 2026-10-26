@@ -15,6 +15,12 @@ test "serialized frontend instantiates a definition" {
     ;
     const Executable = zgc.compile.executableFromZgir(source);
     const Memory = zgc.compile.executableFromZgirWithOptions(source, .{ .target = .memory });
+    const Capped = zgc.compile.executableFromZgirWithOptions(source, .{ .search = .{
+        .max_executables = 2,
+        .max_composition_attempts = 0,
+    } });
+    try std.testing.expectEqual(@as(usize, 2), Capped.executable_candidate_count);
+    try std.testing.expectEqual(@as(usize, 0), Capped.search_composition_attempts);
     try std.testing.expectEqual(@as(usize, 2), Executable.source_names.len);
     try std.testing.expectEqualStrings("x", Executable.source_names[0]);
     try std.testing.expectEqualStrings("bias", Executable.source_names[1]);

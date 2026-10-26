@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const timing = @import("time.zig");
 const Library = @import("library.zig").Library;
+const search_defaults: @import("zgc").compile.SearchOptions = .{};
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
@@ -229,6 +230,8 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     var cpu: ?[]const u8 = null;
     var selection_target: []const u8 = "balanced";
     var frontier_index: ?usize = null;
+    var max_executables: ?usize = null;
+    var max_composition_attempts: ?usize = null;
     var zig: []const u8 = "zig";
     var source_root: []const u8 = build_options.source_root;
     var cache_dir: ?[]const u8 = null;
@@ -269,6 +272,15 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
             index += 1;
             if (index == args.len) return error.MissingFrontierIndex;
             frontier_index = try std.fmt.parseInt(usize, args[index], 10);
+        } else if (std.mem.eql(u8, arg, "--max-executables")) {
+            index += 1;
+            if (index == args.len) return error.MissingSearchLimit;
+            max_executables = try std.fmt.parseInt(usize, args[index], 10);
+            if (max_executables.? == 0) return error.InvalidSearchLimit;
+        } else if (std.mem.eql(u8, arg, "--max-composition-attempts")) {
+            index += 1;
+            if (index == args.len) return error.MissingSearchLimit;
+            max_composition_attempts = try std.fmt.parseInt(usize, args[index], 10);
         } else if (std.mem.eql(u8, arg, "--zig")) {
             index += 1;
             if (index == args.len) return error.MissingZigPath;
@@ -314,7 +326,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     if (!is_zgir and !std.mem.eql(u8, std.fs.path.extension(input_path), ".zig")) return error.ExpectedDefinition;
     if (is_zgir and imports.items.len != 0) return error.GraphDoesNotAcceptImports;
     if (!is_zgir and bind_outputs) return error.OutputBindingRequiresZgir;
-    if (!is_zgir and (!std.mem.eql(u8, selection_target, "balanced") or frontier_index != null)) return error.SelectionRequiresZgir;
+    if (!is_zgir and (!std.mem.eql(u8, selection_target, "balanced") or frontier_index != null or max_executables != null or max_composition_attempts != null)) return error.SelectionRequiresZgir;
     if (!validOptimize(optimize)) return error.InvalidOptimizeMode;
     if (!validSelectionTarget(selection_target)) return error.InvalidSelectionTarget;
     if (cached_output and output != null) return error.ConflictingOutputOptions;
@@ -333,6 +345,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         (try std.Target.Query.parse(.{ .arch_os_abi = triple })).os_tag orelse builtin.os.tag
     else
         builtin.os.tag;
+    const search_text = try std.fmt.allocPrint(allocator, "search:{d}:{d}", .{ max_executables orelse search_defaults.max_executables, max_composition_attempts orelse search_defaults.max_composition_attempts });
     const output_path = if (cached_output) blk: {
         var digest: [32]u8 = undefined;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -343,6 +356,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         hasher.update(target orelse "native");
         hasher.update(cpu orelse "default-cpu");
         hasher.update(selection_target);
+        hasher.update(search_text);
         hasher.update(zig);
         hasher.update(if (inspectable) "inspection:on" else "inspection:off");
         hasher.update(if (bind_outputs) "outputs:bound" else "outputs:owned");
@@ -377,6 +391,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         hasher.update(graph);
         hasher.update(selection_target);
+        hasher.update(search_text);
         hasher.update(frontier_text);
         hasher.update(if (bind_outputs) "outputs:bound" else "outputs:owned");
         hasher.final(&digest);
@@ -388,8 +403,8 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         try work.writeFile(init.io, .{ .sub_path = "executable.zig", .data = adapter_source });
         const configured_source_adapter = try std.fmt.allocPrint(
             allocator,
-            "{s}\npub const executable_options = .{{ .target = .{s}, .frontier_index = {s}, .outputs = .{s} }};\n",
-            .{ source_adapter, selection_target, frontier_text, if (bind_outputs) "bound" else "owned" },
+            "{s}\npub const executable_options = .{{ .target = .{s}, .frontier_index = {s}, .outputs = .{s}, .search = .{{ .max_executables = {d}, .max_composition_attempts = {d} }} }};\n",
+            .{ source_adapter, selection_target, frontier_text, if (bind_outputs) "bound" else "owned", max_executables orelse search_defaults.max_executables, max_composition_attempts orelse search_defaults.max_composition_attempts },
         );
         try work.writeFile(init.io, .{ .sub_path = "graph.zig", .data = configured_source_adapter });
         definition_path = try std.fs.path.join(allocator, &.{ work_path, "executable.zig" });
@@ -542,6 +557,8 @@ fn compileUsage(writer: *std.Io.Writer) !void {
         \\  --cpu <model>            Zig CPU model and features (for example, cortex_m0plus)
         \\  --selection-target <name>  balanced, memory, fast, or small
         \\  --frontier-index <n>   select a retained executable by index
+        \\  --max-executables <n>  cap searched schedules for ZGIR (default 128)
+        \\  --max-composition-attempts <n>  cap local search branches (default 1024)
         \\  --zig <path>             Zig executable (default: zig from PATH)
         \\  --zgc-root <path>        ZGC source checkout
         \\  --cache-dir <path>       local Zig and graph cache (default: .zgc-cache)

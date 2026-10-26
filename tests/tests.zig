@@ -5,6 +5,8 @@ test {
     _ = @import("inspect.zig");
     _ = @import("lifetime_analysis.zig");
     _ = @import("memory_reuse.zig");
+    _ = @import("compiler_traversal.zig");
+    _ = @import("program_construction.zig");
     _ = @import("fusion.zig");
     _ = @import("executable_search.zig");
     _ = @import("semantic_optimization.zig");

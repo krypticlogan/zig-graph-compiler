@@ -51,7 +51,7 @@ pub fn writeExecutable(
 
 pub fn writeCapacity(writer: *Writer, capacity: anytype) Writer.Error!void {
     try writer.print(
-        "Capacity(nodes={d}, input_refs={d}, tensors={d}, outputs={d}, rank={d}, sources={d})\n",
+        "Capacity(nodes={d}, input_refs={d}, tensors={d}, outputs={d}, rank={d}, sources={d}",
         .{
             capacity.max_nodes,
             capacity.max_input_refs,
@@ -61,6 +61,10 @@ pub fn writeCapacity(writer: *Writer, capacity: anytype) Writer.Error!void {
             capacity.max_sources,
         },
     );
+    if (@hasField(@TypeOf(capacity), "max_output_refs")) {
+        if (capacity.max_output_refs) |count| try writer.print(", output_refs={d}", .{count});
+    }
+    try writer.writeAll(")\n");
 }
 
 pub fn writeGraph(writer: *Writer, comptime graph: anytype) Writer.Error!void {

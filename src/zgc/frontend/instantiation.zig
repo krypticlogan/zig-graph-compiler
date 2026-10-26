@@ -7,6 +7,8 @@ const Source = @import("../storage/source.zig");
 const Output = @import("../storage/output.zig");
 
 pub const ZgirExecutableOptions = struct {
+    search: @import("../compiler/search.zig").Options = .{},
+    diagnostics: @import("../compiler/diagnostics.zig").Options = .{},
     target: @import("../compiler/search.zig").OptimizationTarget = .balanced,
     frontier_index: ?usize = null,
     outputs: Output.Binding = .owned,
@@ -58,6 +60,8 @@ pub fn executableFromZgirWithOptions(comptime text: []const u8, comptime options
         .outputs = options.outputs,
         .target = options.target,
         .frontier_index = options.frontier_index,
+        .diagnostics = options.diagnostics,
+        .search = options.search,
     });
     var overrides: [bound_count]Definition.SourceOverride = undefined;
     lines = std.mem.splitScalar(u8, text, '\n');
@@ -82,6 +86,8 @@ pub fn executableFromZgirWithOptions(comptime text: []const u8, comptime options
         .outputs = options.outputs,
         .target = options.target,
         .frontier_index = options.frontier_index,
+        .diagnostics = options.diagnostics,
+        .search = options.search,
     });
 }
 

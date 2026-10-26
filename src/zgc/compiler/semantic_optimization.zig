@@ -1,4 +1,5 @@
 const std = @import("std");
+const Diagnostics = @import("diagnostics.zig");
 const Graph = @import("../core/graph.zig");
 const Semantic = @import("../operations/semantic.zig");
 const Elementwise = @import("../operations/elementwise.zig");
@@ -32,20 +33,38 @@ pub fn SemanticOptimization(comptime capacity: Graph.Capacity) type {
         const SemanticGraph = Graph.Graph(capacity, Semantic.Op);
         const RewriteResult = Result(capacity);
 
-        pub fn optimize(comptime raw: SemanticGraph) RewriteResult {
-            const canonical = canonicalize(raw);
+        pub fn optimize(comptime raw: SemanticGraph, comptime diagnostics: Diagnostics.Options) RewriteResult {
+            const Trace = Diagnostics.Trace(diagnostics);
+            Trace.begin(.semantic_canonicalization);
+            const canonical = canonicalize(raw, diagnostics);
+            Trace.end(.semantic_canonicalization, .{ .nodes = canonical.graph.node_ct, .tensors = canonical.graph.tensor_ct });
+            Trace.begin(.semantic_dead_elimination);
             const compacted = eliminateDead(canonical.graph);
+            Trace.end(.semantic_dead_elimination, .{ .nodes = compacted.graph.node_ct, .tensors = compacted.graph.tensor_ct });
+            Trace.begin(.semantic_provenance);
+            const provenance = composeProvenance(canonical.provenance, compacted.provenance);
+            Trace.end(.semantic_provenance, .{ .entries = provenance.raw_to_optimized_tensor.len });
             return .{
                 .graph = compacted.graph,
-                .provenance = composeProvenance(canonical.provenance, compacted.provenance),
+                .provenance = provenance,
             };
         }
 
-        fn canonicalize(comptime raw: SemanticGraph) RewriteResult {
+        fn canonicalize(comptime raw: SemanticGraph, comptime diagnostics: Diagnostics.Options) RewriteResult {
+            const Trace = Diagnostics.Trace(diagnostics);
+            Trace.begin(.canonical_use_counts);
             const use_counts = countUses(raw);
+            Trace.end(.canonical_use_counts, .{ .entries = use_counts.len });
+            Trace.begin(.canonical_outputs);
             const is_output = outputSet(raw);
+            Trace.end(.canonical_outputs, .{ .entries = is_output.len });
+            Trace.begin(.canonical_concat_analysis);
             const folded_concats = findFoldedConcats(raw, use_counts, is_output);
+            Trace.end(.canonical_concat_analysis, .{ .entries = folded_concats.len });
+            Trace.begin(.canonical_tensor_order);
             const tensor_order = topologicalTensorOrder(raw);
+            Trace.end(.canonical_tensor_order, .{ .entries = tensor_order.len });
+            Trace.begin(.canonical_rewrite);
             var result: RewriteResult = .{ .graph = .init(), .provenance = .{} };
 
             // Prefer the original tensor order whenever it is dependency
@@ -143,6 +162,7 @@ pub fn SemanticOptimization(comptime capacity: Graph.Capacity) type {
                 result.graph.insertOutput(result.provenance.raw_to_optimized_tensor[old_output] orelse
                     @compileError("semantic canonicalization removed a graph output"));
             }
+            Trace.end(.canonical_rewrite, .{ .nodes = result.graph.node_ct, .tensors = result.graph.tensor_ct });
             return result;
         }
 
@@ -235,37 +255,121 @@ pub fn SemanticOptimization(comptime capacity: Graph.Capacity) type {
                 @compileError("tensor storage root was removed before its alias");
         }
 
-        fn topologicalTensorOrder(comptime graph: SemanticGraph) [capacity.max_tensors]usize {
-            var order: [capacity.max_tensors]usize = @splat(0);
-            var emitted: [capacity.max_tensors]bool = @splat(false);
-            var count: usize = 0;
-            while (count < graph.tensor_ct) {
-                var ready: ?usize = null;
-                for (0..graph.tensor_ct) |tensor_id| {
-                    if (emitted[tensor_id]) continue;
-                    const info = graph.tensors[tensor_id].?;
-                    if (info.storage_tensor != tensor_id and !emitted[info.storage_tensor]) continue;
-                    const dependencies_ready = switch (info.origin) {
-                        .source, .literal => true,
-                        .node => |node_id| blk: {
-                            const node = graph.nodes[node_id].?;
-                            for (0..node.input_count) |input_index| {
-                                const input_id = graph.input_refs[node.input_start + input_index].?;
-                                if (!emitted[input_id]) break :blk false;
-                            }
-                            break :blk true;
-                        },
-                    };
-                    if (dependencies_ready) {
-                        ready = tensor_id;
-                        break;
+        // Iterative DFS to produce a topological ordering of tensors.
+        // The order is not unique, but it is guaranteed that every tensor appears after its producer and all of its inputs.
+        fn topologicalTensorOrder(
+            comptime graph: SemanticGraph,
+        ) [capacity.max_tensors]usize {
+            const n = graph.tensor_ct;
+            // Graph construction and prior rewrites usually retain dependency
+            // order. Check edges once and reuse IDs before allocating DFS state.
+            var existing_order: [capacity.max_tensors]usize = @splat(0);
+            var ordered = true;
+            for (0..n) |id| {
+                existing_order[id] = id;
+                const info = graph.tensors[id].?;
+                if (info.storage_tensor != id and info.storage_tensor >= id) ordered = false;
+                if (info.origin == .node) {
+                    const node = graph.nodes[info.origin.node].?;
+                    for (0..node.input_count) |index| {
+                        if (graph.input_refs[node.input_start + index].? >= id) ordered = false;
                     }
                 }
-                const tensor_id = ready orelse @compileError("semantic graph contains a tensor dependency cycle");
-                order[count] = tensor_id;
-                emitted[tensor_id] = true;
-                count += 1;
             }
+            if (ordered) return existing_order;
+
+            // 0 = unseen, 1 = visiting, 2 = completed
+            var state: [capacity.max_tensors]u8 = @splat(0);
+            var order: [capacity.max_tensors]usize = @splat(0);
+
+            const Frame = struct {
+                tensor_id: usize,
+                next_dep: usize,
+            };
+
+            var stack: [capacity.max_tensors]Frame = undefined;
+            var depth: usize = 0;
+            var count: usize = 0;
+
+            const Dependency = struct {
+                fn countDeps(g: *const SemanticGraph, id: usize) usize {
+                    const info = g.tensors[id].?;
+                    const storage_count: usize =
+                        if (info.storage_tensor != id) 1 else 0;
+
+                    return storage_count + switch (info.origin) {
+                        .source, .literal => @as(usize, 0),
+                        .node => |node_id| g.nodes[node_id].?.input_count,
+                    };
+                }
+
+                fn at(g: *const SemanticGraph, id: usize, index: usize) usize {
+                    const info = g.tensors[id].?;
+
+                    if (info.storage_tensor != id) {
+                        if (index == 0) return info.storage_tensor;
+                        return nodeInput(g, info, index - 1);
+                    }
+
+                    return nodeInput(g, info, index);
+                }
+
+                fn nodeInput(
+                    g: *const SemanticGraph,
+                    info: anytype,
+                    index: usize,
+                ) usize {
+                    return switch (info.origin) {
+                        .node => |node_id| blk: {
+                            const node = g.nodes[node_id].?;
+                            break :blk g.input_refs[node.input_start + index].?;
+                        },
+                        .source, .literal => unreachable,
+                    };
+                }
+            };
+
+            for (0..n) |root| {
+                if (state[root] != 0) continue;
+
+                stack[depth] = .{ .tensor_id = root, .next_dep = 0 };
+                state[root] = 1;
+                depth += 1;
+
+                while (depth > 0) {
+                    const frame = &stack[depth - 1];
+                    const id = frame.tensor_id;
+                    const dep_count = Dependency.countDeps(&graph, id);
+
+                    if (frame.next_dep < dep_count) {
+                        const dep = Dependency.at(&graph, id, frame.next_dep);
+                        frame.next_dep += 1;
+
+                        switch (state[dep]) {
+                            0 => {
+                                state[dep] = 1;
+                                stack[depth] = .{
+                                    .tensor_id = dep,
+                                    .next_dep = 0,
+                                };
+                                depth += 1;
+                            },
+                            1 => @compileError(
+                                "semantic graph contains a tensor dependency cycle",
+                            ),
+                            2 => {},
+                            else => unreachable,
+                        }
+                    } else {
+                        // All dependencies have been emitted.
+                        order[count] = id;
+                        count += 1;
+                        state[id] = 2;
+                        depth -= 1;
+                    }
+                }
+            }
+
             return order;
         }
 

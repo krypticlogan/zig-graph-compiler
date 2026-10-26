@@ -71,7 +71,7 @@ test "model selection honors optimization targets and a forced frontier index" {
     const Forced = definition.executableWith(.{ .target = .fast, .frontier_index = forced_index });
     try std.testing.expectEqual(forced_index, Forced.selected_executable_candidate_index);
     try std.testing.expect(std.meta.eql(
-        frontier.candidates[forced_index].?.executable,
+        comptime internal.finalization.executable(frontier.candidates[forced_index].?.executable),
         Forced.program,
     ));
 
@@ -145,7 +145,7 @@ test "expression liveness distinguishes a chain from a wide reduction tree" {
 
 test "contraction analysis choices lower to distinct specialized plans" {
     const Executable = models.MatmulExecutable;
-    const capacity = Executable.internal_capacity;
+    const capacity = Executable.semantic_capacity;
     const candidates = comptime internal.analysis.ContractionAnalysis(capacity).analyze(Executable.semantic_graph);
     try std.testing.expectEqual(@as(usize, 4), candidates.count);
 
@@ -176,7 +176,7 @@ test "contraction analysis choices lower to distinct specialized plans" {
 
 test "layout analysis offers propagated and unpacked contraction layouts" {
     const Executable = models.MatmulExecutable;
-    const capacity = Executable.internal_capacity;
+    const capacity = Executable.semantic_capacity;
     const analysis = internal.analysis.LayoutAnalysis(capacity);
     const candidates = comptime analysis.analyze(Executable.semantic_graph, Executable.semantic_analysis_result);
     try std.testing.expectEqual(@as(usize, 3), candidates.count);
@@ -226,4 +226,65 @@ test "scratch cost accounts for reusable intermediate storage" {
         cost.peak_memory_bytes,
         cost.persistent_memory_bytes + cost.scratch_memory_bytes,
     );
+}
+
+test "search limits count completed schedules and attempted branches" {
+    inline for (.{ 1, 2, 4, 7, 20 }) |limit| {
+        const Executable = models.matmul_definition.executableWith(.{ .search = .{
+            .max_executables = limit,
+            .max_composition_attempts = 5,
+        } });
+        try std.testing.expect(Executable.executable_candidate_count <= limit);
+        if (limit <= 7) try std.testing.expectEqual(@as(usize, limit), Executable.executable_candidate_count);
+        try std.testing.expect(Executable.executable_candidate_count > 0);
+        try std.testing.expect(Executable.search_composition_attempts <= 5);
+        try std.testing.expect(Executable.executable_candidate_frontier.count > 0);
+        if (limit == 1) {
+            try std.testing.expectEqual(@as(usize, 1), Executable.executable_candidate_count);
+            try std.testing.expectEqual(@as(usize, 0), Executable.search_composition_attempts);
+            try std.testing.expectEqual(.reference, Executable.selected_executable_candidate.origin);
+        }
+        if (limit >= 4) try std.testing.expect(Executable.search_composition_limit_reached);
+    }
+}
+
+test "zero branch allowance retains an optimized compatible anchor" {
+    const definition = comptime blk: {
+        var builder = zgc.DefinitionBuilder.init();
+        const input = builder.sources(enum { input }).input(.input, .f32, &.{8});
+        builder.output(builder.relu(builder.neg(input)));
+        break :blk builder.finish();
+    };
+    const Executable = definition.executableWith(.{ .search = .{
+        .max_executables = 2,
+        .max_composition_attempts = 0,
+    } });
+    try std.testing.expectEqual(@as(usize, 2), Executable.executable_candidate_count);
+    try std.testing.expectEqual(@as(usize, 0), Executable.search_composition_attempts);
+    try std.testing.expect(Executable.program.node_ct < Executable.reference_executable_candidate.executable.node_ct);
+    var runtime = Executable.Runtime.init();
+    try runtime.copyInput(.input, &.{ -1, 2, -3, 4, -5, 6, -7, 8 });
+    runtime.run();
+    try std.testing.expectEqualSlices(f32, &.{ 1, 0, 3, 0, 5, 0, 7, 0 }, runtime.outputView(0).contiguousSlice().?);
+}
+
+test "single executable allowance preserves mandatory masked fusion" {
+    const Executable = comptime blk: {
+        var builder = zgc.DefinitionBuilder.init();
+        const sources = builder.sources(enum { condition, input });
+        const condition = sources.input(.condition, .bool, &.{4});
+        const input = sources.input(.input, .f32, &.{4});
+        builder.output(builder.sum(builder.where(condition, input, builder.scalar(.f32, 0)), .{ .axes = &.{0} }));
+        break :blk builder.finish().executableWith(.{ .search = .{
+            .max_executables = 1,
+            .max_composition_attempts = 0,
+        } });
+    };
+    try std.testing.expectEqual(@as(usize, 1), Executable.executable_candidate_count);
+    try std.testing.expectEqual(.planned, Executable.selected_executable_candidate.origin);
+    var runtime = Executable.Runtime.init();
+    try runtime.copyInput(.condition, &.{ true, false, true, false });
+    try runtime.copyInput(.input, &.{ 1, std.math.nan(f32), 3, std.math.nan(f32) });
+    runtime.run();
+    try std.testing.expectEqual(@as(f32, 4), runtime.outputView(0).get(.{}));
 }

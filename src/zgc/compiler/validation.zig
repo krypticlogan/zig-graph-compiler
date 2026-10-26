@@ -11,12 +11,12 @@ const matmul = @import("planning/contraction.zig");
 pub fn Validation(comptime capacity: Graph.Capacity) type {
     return struct {
         pub fn validate(comptime lowered_graph: Graph.Graph(capacity, Op)) type {
-            inline for (0..lowered_graph.node_ct) |node_id| {
+            for (0..lowered_graph.node_ct) |node_id| {
                 const node = lowered_graph.nodes[node_id].?;
                 const output = lowered_graph.tensors[node.result].?;
                 const Inputs = [node.input_count]Graph.Graph(capacity, Op).TensorInfo;
                 var inputs: Inputs = undefined;
-                inline for (0..node.input_count) |input_index| {
+                for (0..node.input_count) |input_index| {
                     const tensor_id = lowered_graph.input_refs[node.input_start + input_index].?;
                     inputs[input_index] = lowered_graph.tensors[tensor_id].?;
                 }
@@ -90,17 +90,17 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
     return struct {
         pub fn validate(comptime executable: anytype) type {
             const Program = @TypeOf(executable);
-            inline for (0..executable.node_ct) |node_id| {
+            for (0..executable.node_ct) |node_id| {
                 const node = executable.nodes[node_id].?;
                 const Inputs = [node.input_count]Program.TensorInfo;
                 var inputs: Inputs = undefined;
-                inline for (0..node.input_count) |input_index| {
+                for (0..node.input_count) |input_index| {
                     const tensor_id = executable.input_refs[node.input_start + input_index].?;
                     inputs[input_index] = executable.tensors[tensor_id].?;
                 }
                 const Outputs = [node.output_count]Program.TensorInfo;
                 var outputs: Outputs = undefined;
-                inline for (0..node.output_count) |output_index| {
+                for (0..node.output_count) |output_index| {
                     const tensor_id = executable.output_refs[node.output_start + output_index].?;
                     outputs[output_index] = executable.tensors[tensor_id].?;
                 }

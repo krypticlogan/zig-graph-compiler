@@ -42,6 +42,12 @@ pub fn estimate(comptime capacity: Graph.Capacity, comptime graph: anytype, repr
         result.contraction_work_delta += @as(i128, @intCast(contraction_analysis.estimateWork(lhs, rhs, strategy))) -
             @as(i128, @intCast(contraction_analysis.estimateWork(lhs, rhs, default_strategy)));
     }
+    return finish(result);
+}
+
+/// Derive the combined score from accumulated region and policy contributions.
+pub fn finish(estimate_value: Estimate) Estimate {
+    var result = estimate_value;
     const vector_bytes = (std.simd.suggestVectorLength(f32) orelse 1) * @sizeOf(f32);
     const saved_transfer_units = result.traffic_saved_bytes / vector_bytes;
     result.estimated_runtime_delta = result.contraction_work_delta - @as(i128, @intCast(saved_transfer_units));

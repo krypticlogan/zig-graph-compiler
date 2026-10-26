@@ -6,6 +6,7 @@ const Op = op_module.Op;
 const SourceStorage = @import("../storage/source.zig");
 const Tensor = @import("../core/tensor.zig");
 const Expr = @import("expressive.zig");
+const ChunkedBuffer = @import("chunked_buffer.zig");
 const EmptySourceKey = enum(noreturn) {};
 pub const SerializedSourceKey = enum(usize) { _ };
 
@@ -82,7 +83,7 @@ pub const Shape = struct {
 
 /// Tensor value type for graph construction. The value is immutable.
 pub const Value = struct {
-    id: Tensor.Id,
+    id: usize,
     dtype: Dtype,
     shape: Shape,
 };
@@ -121,11 +122,14 @@ pub fn Definition(
             binding: SourceStorage.Binding,
         };
         pub const ExecutableOptions = struct {
+            search: @import("../compiler/search.zig").Options = .{},
             sources: []const SourceOverride = &.{},
             outputs: @import("../storage/output.zig").Binding = .owned,
             target: @import("../compiler/search.zig").OptimizationTarget = .balanced,
             /// An index in the retained executable frontier overrides target.
             frontier_index: ?usize = null,
+            /// Compile logs and intentional stage checkpoints for diagnostic builds.
+            diagnostics: @import("../compiler/diagnostics.zig").Options = .{},
         };
 
         nodes: [node_count]Node,
@@ -151,14 +155,18 @@ pub fn Definition(
                 options.sources,
                 options.outputs,
                 .{ .target = options.target, .frontier_index = options.frontier_index },
+                options.diagnostics,
+                options.search,
             );
         }
     };
 }
 
-/// Capacity-free graph construction interface.
+/// Concrete graph builder with chunked comptime storage and exact-sized output.
 pub const DefinitionBuilder = struct {
     const Self = @This();
+    /// Logical maximum for each collection; storage grows in small chunks.
+    pub const max_size = ChunkedBuffer.max_size;
     pub const ShiftBoundary = union(enum) {
         wrap,
         edge,
@@ -172,10 +180,11 @@ pub const DefinitionBuilder = struct {
         iterations: []const SliceLoopIteration,
     };
 
-    nodes: []const Node = &.{},
-    tensors: []const TensorRecord = &.{},
-    input_refs: []const Tensor.Id = &.{},
-    outputs: []const Tensor.Id = &.{},
+    nodes: ChunkedBuffer.Buffer(Node) = .{},
+    tensors: ChunkedBuffer.Buffer(TensorRecord) = .{},
+    input_refs: ChunkedBuffer.Buffer(Tensor.Id) = .{},
+    outputs: ChunkedBuffer.Buffer(Tensor.Id) = .{},
+    rank_capacity: usize = 0,
     source_key_type: ?[]const type = null,
     source_names: []const [:0]const u8 = &.{},
 
@@ -193,6 +202,7 @@ pub const DefinitionBuilder = struct {
         } else {
             self.source_key_type = &[_]type{SourceKey};
             const info = @typeInfo(SourceKey).@"enum";
+            if (sourceNameCapacity(SourceKey) > max_size) @compileError("definition source names exceed max_size");
             var names: [sourceNameCapacity(SourceKey)][:0]const u8 = @splat("");
             for (info.field_values, info.field_names) |value, name| names[@intCast(value)] = name;
             self.source_names = &names;
@@ -207,6 +217,7 @@ pub const DefinitionBuilder = struct {
         comptime names: []const [:0]const u8,
     ) Sources(SerializedSourceKey) {
         if (self.source_key_type != null) @compileError("definition sources are already initialized");
+        if (names.len > max_size) @compileError("definition source names exceed max_size");
         self.source_key_type = &[_]type{SerializedSourceKey};
         self.source_names = names;
         return .{ .builder = self };
@@ -632,7 +643,7 @@ pub const DefinitionBuilder = struct {
     }
 
     pub fn output(comptime self: *Self, comptime value: Value) void {
-        self.outputs = self.outputs ++ &[_]Tensor.Id{value.id};
+        self.outputs.append(value.id);
     }
 
     pub fn finish(comptime self: *const Self) Definition(
@@ -641,25 +652,26 @@ pub const DefinitionBuilder = struct {
         self.tensors.len,
         self.input_refs.len,
         self.outputs.len,
-        maximumRank(self.tensors),
+        self.rank_capacity,
         self.source_names.len,
     ) {
         const SourceKey = self.sourceKey();
-        validateSources(self.tensors, SourceKey, self.source_names);
+        const tensors = self.tensors.toArray();
+        validateSources(&tensors, SourceKey, self.source_names);
         const Result = Definition(
             SourceKey,
             self.nodes.len,
             self.tensors.len,
             self.input_refs.len,
             self.outputs.len,
-            maximumRank(self.tensors),
+            self.rank_capacity,
             self.source_names.len,
         );
         return Result{
-            .nodes = self.nodes[0..self.nodes.len].*,
-            .tensors = self.tensors[0..self.tensors.len].*,
-            .input_refs = self.input_refs[0..self.input_refs.len].*,
-            .outputs = self.outputs[0..self.outputs.len].*,
+            .nodes = self.nodes.toArray(),
+            .tensors = tensors,
+            .input_refs = self.input_refs.toArray(),
+            .outputs = self.outputs.toArray(),
             .source_names = self.source_names[0..self.source_names.len].*,
         };
     }
@@ -675,7 +687,8 @@ pub const DefinitionBuilder = struct {
         comptime dtype: Dtype,
         comptime shape_extents: []const usize,
     ) Value {
-        for (self.tensors) |tensor| switch (tensor.origin) {
+        var tensors = self.tensors.reverseIterator();
+        while (tensors.next()) |tensor| switch (tensor.origin) {
             .source => |existing| if (existing == source_index) @compileError("a source key may only be defined once"),
             .node, .literal => {},
         };
@@ -727,7 +740,7 @@ pub const DefinitionBuilder = struct {
         const tensor_id = self.tensors.len;
         const input_start = self.input_refs.len;
         for (inputs) |input_value| {
-            self.input_refs = self.input_refs ++ &[_]Tensor.Id{input_value.id};
+            self.input_refs.append(input_value.id);
         }
         self.appendNode(.{
             .op = op,
@@ -744,11 +757,12 @@ pub const DefinitionBuilder = struct {
     }
 
     fn appendNode(comptime self: *Self, comptime node: Node) void {
-        self.nodes = self.nodes ++ &[_]Node{node};
+        self.nodes.append(node);
     }
 
     fn appendTensor(comptime self: *Self, comptime tensor: TensorRecord) void {
-        self.tensors = self.tensors ++ &[_]TensorRecord{tensor};
+        self.tensors.append(tensor);
+        self.rank_capacity = @max(self.rank_capacity, tensor.value.shape.rank);
     }
 
     fn reductionAttrs(comptime tensor: Value, comptime options: ReductionOptions) Op.Compute.ReductionAttrs {
@@ -795,12 +809,6 @@ pub fn Sources(comptime SourceKey: type) type {
 fn maximumInputRank(comptime inputs: []const Value) usize {
     var result: usize = 0;
     for (inputs) |input| result = @max(result, input.shape.rank);
-    return result;
-}
-
-fn maximumRank(comptime tensors: []const TensorRecord) usize {
-    var result: usize = 0;
-    for (tensors) |tensor| result = @max(result, tensor.value.shape.rank);
     return result;
 }
 
@@ -855,6 +863,7 @@ fn validateSourceKey(comptime Enum: type) void {
 fn sourceNameCapacity(comptime Enum: type) usize {
     var capacity: usize = 0;
     for (@typeInfo(Enum).@"enum".field_values) |value| {
+        if (value >= DefinitionBuilder.max_size) @compileError("definition source names exceed max_size");
         capacity = @max(capacity, @as(usize, @intCast(value)) + 1);
     }
     return capacity;

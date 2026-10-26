@@ -12,7 +12,7 @@ pub fn buildValue(
         .node => |id| id,
         .source, .literal => return addInput(tensor_id, built),
     };
-    if (!included_nodes[producer_id]) return addInput(tensor_id, built);
+    if (!included_nodes.isSet(producer_id)) return addInput(tensor_id, built);
 
     const producer = graph.nodes[producer_id].?;
     const operation = Elementwise.fromCompute(producer.op.compute).?;
