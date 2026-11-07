@@ -1,5 +1,6 @@
 const std = @import("std");
-const zgc = @import("zgc_internal").api;
+const internal = @import("zgc_internal");
+const zgc = internal.api;
 
 const ProducerSources = enum(usize) { lhs, rhs };
 const ProducerDefinition = zgc.DefinitionBuilder;
@@ -227,6 +228,34 @@ test "reductions over a shared domain execute as one multi-output region" {
     model.run();
     try std.testing.expectEqualSlices(f32, &.{ 6, 15 }, model.outputView(0).contiguousSlice().?);
     try std.testing.expectEqualSlices(f32, &.{ 9, 18 }, model.outputView(1).contiguousSlice().?);
+}
+
+test "reduction discovery separates dependent outputs but groups independent siblings" {
+    const Executable = comptime model_type: {
+        var builder = zgc.DefinitionBuilder.init();
+        const input = builder.sources(enum { input }).input(.input, .f32, &.{ 2, 2 });
+        const first = builder.sum(input, .{ .axes = &.{1}, .keep_dims = true });
+        const dependent = builder.sum(builder.add(input, first), .{ .axes = &.{1}, .keep_dims = true });
+        const sibling = builder.mean(input, .{ .axes = &.{1}, .keep_dims = true });
+        builder.output(first);
+        builder.output(dependent);
+        builder.output(sibling);
+        break :model_type builder.finish().executable();
+    };
+    const graph = Executable.semantic_graph;
+    const capacity = comptime internal.finalization.count(graph);
+    const candidates = comptime internal.analysis.FusionAnalysis(capacity).analyze(graph, Executable.semantic_analysis_result);
+    var discovered: ?internal.analysis.FusionSelection(capacity.max_nodes) = null;
+    for (candidates.values[0..candidates.count]) |candidate| {
+        if (candidate.?.regime == .discovered) discovered = candidate.?.regions;
+    }
+    const selection = discovered orelse return error.TestUnexpectedResult;
+    const first_node = graph.tensors[graph.outputs[0].?].?.origin.node;
+    const dependent_node = graph.tensors[graph.outputs[1].?].?.origin.node;
+    const sibling_node = graph.tensors[graph.outputs[2].?].?.origin.node;
+    try std.testing.expectEqual(@as(usize, 2), selection.region_count);
+    try std.testing.expectEqual(selection.node_region[first_node].?.reduction, selection.node_region[sibling_node].?.reduction);
+    try std.testing.expect(selection.node_region[first_node].?.reduction != selection.node_region[dependent_node].?.reduction);
 }
 
 test "fused reductions vectorize a contiguous reduced axis and handle its tail" {

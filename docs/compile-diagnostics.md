@@ -17,8 +17,8 @@ results or consuming memory. `executableFromZgirWithOptions` accepts the same
 
 `.log = true` logs pipeline beginnings and completions without stopping early.
 `.detailed = true` adds canonicalization substeps, representation lowering and
-scheduling, and each executable candidate's validation, lifetimes, source/output
-plans, storage planning, and estimated costs. Select a detailed stage with
+scheduling, representation validation and output bindings, and each distinct
+schedule's lifetimes, storage planning, and estimated costs. Select a detailed stage with
 `stop_after` to enable its own log without enabling all detailed logs.
 
 Zig's [`@compileLog`](https://ziglang.org/documentation/master/#compileLog)
@@ -53,16 +53,17 @@ can overshoot that threshold; the memory limit is unavailable on other platforms
 Durations and memory include the builder and all stages preceding a checkpoint;
 they are not isolated stage durations or precise allocation accounting. Cache
 state and diagnostic instrumentation also affect the measurements. The
-`executable_generation` checkpoint forces executable memory planning and runtime
-layout; it does not compile every lazy runtime method or measure LLVM codegen.
+`executable_generation` assembles the selected executable from retained
+candidate plans and establishes its runtime layout; it does not compile every
+lazy runtime method or measure LLVM codegen.
 
 ## Checkpoints
 
 Pipeline stages are `definition`, `counting`, `construction`, `raw_validation`,
 `semantic_optimization`, `semantic_finalization`, `semantic_validation`, `semantic_analysis`,
 `fusion_analysis`, `layout_analysis`, `remap_analysis`, `contraction_analysis`,
-`executable_search`, `selection`, `final_validation`, `lifetime_analysis`,
-`source_planning`, `output_planning`, and `executable_generation`.
+`source_planning`, `executable_search`, `selection`, `selected_compaction`,
+`selected_lifetimes`, `selected_output_plan`, and `executable_generation`.
 
 Optimizer substeps are `semantic_canonicalization`, `canonical_use_counts`,
 `canonical_outputs`, `canonical_concat_analysis`, `canonical_tensor_order`,
@@ -70,6 +71,8 @@ Optimizer substeps are `semantic_canonicalization`, `canonical_use_counts`,
 Search/candidate checkpoints are listed in
 [`diagnostics.zig`](../src/zgc/compiler/diagnostics.zig). A repeated substep
 checkpoint stops at its first occurrence.
+`reference_cost` and `representation_cost` measure order-invariant cost facts;
+`candidate_cost` finalizes schedule-dependent memory costs.
 
 ## Initial free-surface investigation
 

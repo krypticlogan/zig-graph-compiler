@@ -7,6 +7,21 @@ pub const StorageRegion = struct {
     alignment: usize,
 };
 
+/// Immutable storage result retained by executable search for the winner.
+pub const Snapshot = struct {
+    tensor_regions: []const ?StorageRegion,
+    byte_count: usize,
+    alignment: usize,
+};
+
+pub fn fromSnapshot(comptime snapshot: Snapshot) type {
+    return struct {
+        pub const tensor_regions = snapshot.tensor_regions[0..].*;
+        pub const byte_count = snapshot.byte_count;
+        pub const alignment = snapshot.alignment;
+    };
+}
+
 const FreeSpan = struct {
     offset: usize,
     len_bytes: usize,
@@ -230,5 +245,10 @@ pub fn MemoryPlan(
         pub const tensor_regions: [g.tensor_ct]?StorageRegion = regions;
         pub const byte_count: usize = total_bytes;
         pub const alignment: usize = storage_alignment;
+        pub const snapshot: Snapshot = .{
+            .tensor_regions = &regions,
+            .byte_count = total_bytes,
+            .alignment = storage_alignment,
+        };
     };
 }

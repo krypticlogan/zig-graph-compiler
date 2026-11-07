@@ -1,6 +1,26 @@
 //! Storage policy for the complete set of graph outputs.
 pub const Binding = enum { owned, bound };
 
+pub const Snapshot = struct {
+    binding: Binding,
+    root_output_indices: []const ?usize,
+};
+
+pub fn fromSnapshot(comptime snapshot: Snapshot) type {
+    return struct {
+        pub const output_binding = snapshot.binding;
+        pub const root_output_indices = snapshot.root_output_indices[0..snapshot.root_output_indices.len].*;
+
+        pub fn outputForRoot(comptime root_id: usize) ?usize {
+            return root_output_indices[root_id];
+        }
+
+        pub fn isBoundRoot(root_id: usize) bool {
+            return root_output_indices[root_id] != null;
+        }
+    };
+}
+
 pub fn Plan(comptime program: anytype, comptime binding: Binding) type {
     var root_outputs: [program.tensor_ct]?usize = @splat(null);
     if (binding == .bound) {
@@ -24,16 +44,5 @@ pub fn Plan(comptime program: anytype, comptime binding: Binding) type {
         }
     }
     const mapped_outputs = root_outputs;
-    return struct {
-        pub const output_binding = binding;
-        pub const root_output_indices = mapped_outputs;
-
-        pub fn outputForRoot(comptime root_id: usize) ?usize {
-            return root_output_indices[root_id];
-        }
-
-        pub fn isBoundRoot(root_id: usize) bool {
-            return root_output_indices[root_id] != null;
-        }
-    };
+    return fromSnapshot(.{ .binding = binding, .root_output_indices = &mapped_outputs });
 }

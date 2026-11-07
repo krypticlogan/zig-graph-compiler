@@ -1,16 +1,28 @@
 const builtin = @import("builtin");
 pub const Expression = @import("../optimization/fusion/expression.zig").Program;
 
+pub const ExpressionFacts = struct {
+    peak_live_values: usize,
+    max_arity: usize,
+};
+
 /// Count simultaneously live expression results in the unrolled kernel body.
 /// Values with no instruction consumer are treated as live through the store.
 pub fn peakLiveValues(comptime expression: Expression) usize {
+    return expressionFacts(expression).peak_live_values;
+}
+
+pub fn expressionFacts(comptime expression: Expression) ExpressionFacts {
     const count = expression.instructions.len;
     var last_use: [count]usize = undefined;
     var has_consumer: [count]bool = @splat(false);
+    var max_arity: usize = 0;
     for (0..count) |index| last_use[index] = index;
 
     for (expression.instructions, 0..) |instruction, user| {
-        for (instruction.args[0..instruction.operation.arity()]) |reference| {
+        const arity = instruction.operation.arity();
+        max_arity = @max(max_arity, arity);
+        for (instruction.args[0..arity]) |reference| {
             switch (reference) {
                 .instruction => |producer| {
                     has_consumer[producer] = true;
@@ -33,13 +45,7 @@ pub fn peakLiveValues(comptime expression: Expression) usize {
         peak = @max(peak, live);
         live -= ends[current];
     }
-    return peak;
-}
-
-pub fn maxArity(comptime expression: Expression) usize {
-    var result: usize = 0;
-    for (expression.instructions) |instruction| result = @max(result, instruction.operation.arity());
-    return result;
+    return .{ .peak_live_values = peak, .max_arity = max_arity };
 }
 
 /// Conservative architectural register budget. This is a cost threshold,

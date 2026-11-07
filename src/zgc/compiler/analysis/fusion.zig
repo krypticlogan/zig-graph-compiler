@@ -74,19 +74,61 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
             var first: [capacity.max_nodes]?usize = @splat(null);
             var last: [capacity.max_nodes]?usize = @splat(null);
             var next: [capacity.max_nodes]?usize = @splat(null);
+            // Open-addressed signatures keep unrelated reduction domains out of
+            // the group search. A signature can still own multiple groups when
+            // dependencies prevent their outputs from being delayed together.
+            const bucket_count = capacity.max_nodes * 2 + 1;
+            var bucket_first: [bucket_count]?usize = @splat(null);
+            var next_group: [capacity.max_nodes]?usize = @splat(null);
+            var reduction_group: [capacity.max_nodes]?usize = @splat(null);
+            var visited: [capacity.max_nodes]usize = @splat(0);
+            var blocked_group: [capacity.max_nodes]usize = @splat(0);
+            var pending: [capacity.max_nodes]usize = undefined;
 
             for (analysis.dependencies.topological_order[0..graph.node_ct]) |node_id| {
                 const descriptor = analysis.reductions[node_id] orelse continue;
                 const input_id = graph.input_refs[graph.nodes[node_id].?.input_start].?;
                 const anchor = analysis.fusion_anchor[input_id];
 
+                var bucket: usize = @intCast(signatureHash(graph, descriptor, input_id, anchor) % bucket_count);
+                while (bucket_first[bucket]) |head| {
+                    if (compatible(graph, &groups[head].?, descriptor, input_id, anchor)) break;
+                    bucket = (bucket + 1) % bucket_count;
+                }
                 var selected_group: ?usize = null;
-                for (0..result.region_count) |region_id| {
-                    const group = groups[region_id].?;
-                    if (!compatible(graph, group, descriptor, input_id, anchor)) continue;
-                    if (!canDelayExistingOutputs(graph, analysis, first[region_id], &next, node_id)) continue;
-                    selected_group = region_id;
-                    break;
+                var last_matching: ?usize = null;
+                const stamp = node_id + 1;
+                if (bucket_first[bucket] != null) {
+                    // Walk the candidate's ancestors once rather than asking
+                    // reachability separately for every reduction in a group.
+                    var pending_count: usize = 1;
+                    var pending_index: usize = 0;
+                    pending[0] = node_id;
+                    visited[node_id] = stamp;
+                    while (pending_index < pending_count) : (pending_index += 1) {
+                        const ancestor = graph.nodes[pending[pending_index]].?;
+                        for (0..ancestor.input_count) |input_index| {
+                            const tensor_id = graph.input_refs[ancestor.input_start + input_index].?;
+                            const producer_id = switch (graph.tensors[tensor_id].?.origin) {
+                                .node => |id| id,
+                                .source, .literal => continue,
+                            };
+                            if (reduction_group[producer_id]) |id| blocked_group[id] = stamp;
+                            if (visited[producer_id] == stamp) continue;
+                            visited[producer_id] = stamp;
+                            pending[pending_count] = producer_id;
+                            pending_count += 1;
+                        }
+                    }
+                }
+                var cursor = bucket_first[bucket];
+                while (cursor) |region_id| {
+                    if (blocked_group[region_id] != stamp) {
+                        selected_group = region_id;
+                        break;
+                    }
+                    last_matching = region_id;
+                    cursor = next_group[region_id];
                 }
 
                 const region_id = selected_group orelse blk: {
@@ -96,6 +138,11 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                         .domain_tensor = input_id,
                         .anchor_tensor = anchor,
                     };
+                    if (last_matching) |previous| {
+                        next_group[previous] = id;
+                    } else {
+                        bucket_first[bucket] = id;
+                    }
                     result.region_count += 1;
                     break :blk id;
                 };
@@ -104,6 +151,7 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
                 last[region_id] = node_id;
                 group.reduction_count += 1;
                 group.emit_node = node_id;
+                reduction_group[node_id] = region_id;
             }
 
             for (0..result.region_count) |region_id| {
@@ -225,7 +273,7 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
 
         fn compatible(
             comptime graph: SemanticGraph,
-            comptime group: Group(capacity.max_nodes),
+            group: *const Group(capacity.max_nodes),
             comptime descriptor: Reduction.Descriptor,
             comptime input_id: usize,
             comptime anchor: usize,
@@ -245,19 +293,23 @@ pub fn FusionAnalysis(comptime capacity: Graph.Capacity) type {
             return true;
         }
 
-        fn canDelayExistingOutputs(
+        fn signatureHash(
             comptime graph: SemanticGraph,
-            comptime analysis: GraphFacts,
-            first: ?usize,
-            next: *const [capacity.max_nodes]?usize,
-            comptime candidate_node: usize,
-        ) bool {
-            var cursor = first;
-            while (cursor) |reduction_node| {
-                if (analysis.dependencies.dependsOn(graph, candidate_node, reduction_node)) return false;
-                cursor = next[reduction_node];
+            descriptor: Reduction.Descriptor,
+            input_id: usize,
+            anchor: usize,
+        ) u64 {
+            const tensor = graph.tensors[input_id].?;
+            var hash: u64 = 14695981039346656037;
+            hash = (hash ^ @as(u64, @intCast(anchor))) *% 1099511628211;
+            hash = (hash ^ descriptor.axes) *% 1099511628211;
+            hash = (hash ^ @as(u64, @intFromBool(descriptor.keep_dims))) *% 1099511628211;
+            hash = (hash ^ @as(u64, @backingInt(tensor.dtype))) *% 1099511628211;
+            hash = (hash ^ @as(u64, @intCast(tensor.shape.rank))) *% 1099511628211;
+            for (0..tensor.shape.rank) |axis| {
+                hash = (hash ^ @as(u64, @intCast(tensor.shape.at(axis)))) *% 1099511628211;
             }
-            return true;
+            return hash;
         }
 
         fn markFoldedProducers(

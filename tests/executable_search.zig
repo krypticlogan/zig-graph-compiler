@@ -228,6 +228,18 @@ test "scratch cost accounts for reusable intermediate storage" {
     );
 }
 
+test "selected program retains candidate lifetime and storage decisions" {
+    const Executable = models.ReuseExecutable;
+    const candidate = Executable.executable_candidate_frontier.candidates[Executable.selected_executable_candidate_index].?;
+    try std.testing.expectEqualSlices(internal.search.Lifetime, candidate.lifetimes, &Executable.lifetime_analysis.tensor_lifetimes);
+    try std.testing.expectEqual(candidate.storage.byte_count, Executable.memory_plan.byte_count);
+    try std.testing.expectEqual(candidate.storage.alignment, Executable.memory_plan.alignment);
+    for (candidate.storage.tensor_regions, Executable.memory_plan.tensor_regions) |planned, retained| {
+        try std.testing.expect(std.meta.eql(planned, retained));
+    }
+    try std.testing.expectEqualSlices(?usize, candidate.outputs.root_output_indices, &Executable.output_plan.root_output_indices);
+}
+
 test "search limits count completed schedules and attempted branches" {
     inline for (.{ 1, 2, 4, 7, 20 }) |limit| {
         const Executable = models.matmul_definition.executableWith(.{ .search = .{

@@ -77,16 +77,21 @@ pub fn executable(
 
     Trace.end(.contraction_analysis, .{ .candidates = contraction_candidates.count });
 
+    Trace.begin(.source_planning);
+    // Source ownership and embedded byte counts depend on logical source
+    // metadata, which is unchanged by executable layout or scheduling choices.
+    const SourcePlan = Source.Plan(Definition.Source, capacity, SemanticValidated.graph, source_configuration);
+    Trace.end(.source_planning, .{ .sources = capacity.max_sources, .plan_type_bytes = @sizeOf(SourcePlan) });
+
     Trace.begin(.executable_search);
     const executable_search = Search.ExecutableSearch(capacity).search(
-        Definition.Source,
+        SourcePlan,
         SemanticValidated,
         semantic_analysis,
         fusion_candidates,
         layout_candidates,
         remap_candidates,
         contraction_candidates,
-        source_configuration,
         output_binding,
         diagnostics,
         search_options,
@@ -94,28 +99,29 @@ pub fn executable(
     Trace.end(.executable_search, .{ .representations = executable_search.representation_candidate_count, .generated = executable_search.generated_count, .retained = executable_search.frontier.count });
     Trace.begin(.selection);
     const selected_candidate = executable_search.selected(selection);
+    Trace.end(.selection, .{ .origin = selected_candidate.origin, .schedule = selected_candidate.schedule, .nodes = selected_candidate.executable.node_ct, .cost = selected_candidate.cost });
+    Trace.begin(.selected_compaction);
     const program = Finalization.executable(selected_candidate.executable);
     const executable_capacity = Finalization.count(program);
-    Trace.end(.selection, .{ .origin = selected_candidate.origin, .schedule = selected_candidate.schedule, .nodes = program.node_ct, .cost = selected_candidate.cost });
-    Trace.begin(.final_validation);
-    const FinalValidated = validation.FinalValidation(executable_capacity).validate(program);
+    const FinalValidated = validation.FinalValidation(executable_capacity).assumeValidated(program);
     const graph = FinalValidated.graph;
+    if (selected_candidate.lifetimes.len != graph.tensor_ct or
+        selected_candidate.storage.tensor_regions.len != graph.tensor_ct or
+        selected_candidate.outputs.root_output_indices.len != graph.tensor_ct)
+    {
+        @compileError("selected executable plans do not match the compact program");
+    }
 
-    Trace.end(.final_validation, .{ .nodes = graph.node_ct });
-    Trace.begin(.lifetime_analysis);
-    const lifetime_analysis = Search.LifetimeAnalysis().analyze(FinalValidated);
-    Trace.end(.lifetime_analysis, .{ .tensors = lifetime_analysis.tensor_lifetimes.len });
-    Trace.begin(.source_planning);
-    const SourcePlan = Source.Plan(
-        Definition.Source,
-        executable_capacity,
-        graph,
-        source_configuration,
-    );
-    Trace.end(.source_planning, .{ .sources = capacity.max_sources, .plan_type_bytes = @sizeOf(SourcePlan) });
-    Trace.begin(.output_planning);
-    const OutputPlan = Output.Plan(graph, output_binding);
-    Trace.end(.output_planning, .{ .outputs = graph.output_ct, .plan_type_bytes = @sizeOf(OutputPlan) });
+    Trace.end(.selected_compaction, .{ .nodes = graph.node_ct });
+    Trace.begin(.selected_lifetimes);
+    const lifetime_analysis: Search.LifetimeSet(graph.tensor_ct) = .{
+        .tensor_lifetimes = selected_candidate.lifetimes[0..graph.tensor_ct].*,
+    };
+    Trace.end(.selected_lifetimes, .{ .tensors = lifetime_analysis.tensor_lifetimes.len });
+    Trace.begin(.selected_output_plan);
+    const OutputPlan = Output.fromSnapshot(selected_candidate.outputs);
+    Trace.end(.selected_output_plan, .{ .outputs = graph.output_ct, .plan_type_bytes = @sizeOf(OutputPlan) });
+    const MemoryPlan = @import("../storage/storage.zig").fromSnapshot(selected_candidate.storage);
     Trace.begin(.executable_generation);
     const Compiled = Executable(
         Definition.Source,
@@ -130,6 +136,7 @@ pub fn executable(
         lifetime_analysis,
         SourcePlan,
         OutputPlan,
+        MemoryPlan,
         &definition.source_names,
     );
     if (diagnostics.log or diagnostics.stop_after != null) {

@@ -4,7 +4,6 @@ const Diagnostics = @import("diagnostics.zig");
 const Execution = @import("../execution/execution.zig");
 const ProgramFactory = @import("../execution/program.zig").Program;
 const Graph = @import("../core/graph.zig");
-const Source = @import("../storage/source.zig");
 const Output = @import("../storage/output.zig");
 const Storage = @import("../storage/storage.zig");
 const Tensor = @import("../core/tensor.zig");
@@ -39,11 +38,11 @@ pub fn SearchResult(comptime capacity: Graph.Capacity) type {
         contraction_candidate_count: usize,
         generated_contraction_strategies: [4]bool,
 
-        pub fn selected(comptime result: @This(), comptime options: SelectionOptions) PlanCandidate(capacity) {
-            return result.frontier.candidates[result.selectedIndex(options)].?.*;
+        pub fn selected(comptime result: *const @This(), comptime options: SelectionOptions) *const PlanCandidate(capacity) {
+            return result.frontier.candidates[result.selectedIndex(options)].?;
         }
 
-        pub fn selectedIndex(comptime result: @This(), comptime options: SelectionOptions) usize {
+        pub fn selectedIndex(comptime result: *const @This(), comptime options: SelectionOptions) usize {
             if (options.frontier_index) |index| {
                 if (index >= result.frontier.count) @compileError("frontier_index is outside the retained executable frontier");
                 return index;
@@ -74,10 +73,7 @@ pub fn LifetimeSet(comptime tensor_count: usize) type {
 /// Aliasing tensors receive the consolidated lifetime of their storage root.
 pub fn LifetimeAnalysis() type {
     return struct {
-        pub fn analyze(
-            comptime Validated: type,
-        ) LifetimeSet(Validated.graph.tensor_ct) {
-            const graph = Validated.graph;
+        pub fn analyze(comptime graph: anytype) LifetimeSet(graph.tensor_ct) {
             var storage_lifetimes: [graph.tensor_ct]?Lifetime = @splat(null);
 
             for (0..graph.tensor_ct) |tensor_id| {
@@ -227,6 +223,9 @@ pub const SelectionOptions = struct {
 pub fn PlanCandidate(comptime capacity: Graph.Capacity) type {
     return struct {
         executable: ProgramFactory(capacity, Execution.Op),
+        lifetimes: []const Lifetime = &.{},
+        storage: Storage.Snapshot = .{ .tensor_regions = &.{}, .byte_count = 0, .alignment = 1 },
+        outputs: Output.Snapshot = .{ .binding = .owned, .root_output_indices = &.{} },
         origin: Origin,
         fusion_regime: ?Analysis.FusionRegime = null,
         layout_regime: ?Analysis.LayoutRegime = null,
@@ -260,6 +259,15 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
                     return;
                 }
             }
+
+            set.insertDistinct(proposed);
+        }
+
+        /// The completion cache has already proved this physical program is
+        /// absent from every earlier candidate, including evicted entries.
+        pub fn insertDistinct(set: *Self, proposed: Candidate) void {
+            const retained = proposed;
+            const candidate = &retained;
 
             if (set.count == max_candidates) {
                 var pool: [max_candidates + 1]?*const Candidate = undefined;
@@ -352,20 +360,66 @@ pub fn CandidateSet(comptime capacity: Graph.Capacity) type {
             return !lhs.preferredTo(rhs) and !rhs.preferredTo(lhs);
         }
 
-        fn sameExecutable(lhs: *const ProgramFactory(capacity, Execution.Op), rhs: *const ProgramFactory(capacity, Execution.Op)) bool {
+        pub fn sameExecutable(lhs: *const ProgramFactory(capacity, Execution.Op), rhs: *const ProgramFactory(capacity, Execution.Op)) bool {
             if (lhs.node_ct != rhs.node_ct or lhs.tensor_ct != rhs.tensor_ct or
                 lhs.input_ref_ct != rhs.input_ref_ct or lhs.output_ref_ct != rhs.output_ref_ct or
-                lhs.output_ct != rhs.output_ct) return false;
-            for (lhs.tensors[0..lhs.tensor_ct], rhs.tensors[0..rhs.tensor_ct]) |left, right| {
-                if (!std.meta.eql(left, right)) return false;
-            }
+                lhs.output_ct != rhs.output_ct or lhs.source_ct != rhs.source_ct) return false;
             for (lhs.nodes[0..lhs.node_ct], rhs.nodes[0..rhs.node_ct]) |left, right| {
-                if (!std.meta.eql(left, right)) return false;
+                if (!equalStructure(left, right)) return false;
+            }
+            for (lhs.tensors[0..lhs.tensor_ct], rhs.tensors[0..rhs.tensor_ct]) |left, right| {
+                if (!equalStructure(left, right)) return false;
+            }
+            for (lhs.sources[0..lhs.source_ct], rhs.sources[0..rhs.source_ct]) |left, right| {
+                if (!equalStructure(left, right)) return false;
             }
             if (!std.mem.eql(?usize, lhs.input_refs[0..lhs.input_ref_ct], rhs.input_refs[0..rhs.input_ref_ct]) or
                 !std.mem.eql(?usize, lhs.output_refs[0..lhs.output_ref_ct], rhs.output_refs[0..rhs.output_ref_ct]) or
                 !std.mem.eql(?usize, lhs.outputs[0..lhs.output_ct], rhs.outputs[0..rhs.output_ct])) return false;
             return std.mem.eql(bool, lhs.materialized[0..lhs.tensor_ct], rhs.materialized[0..rhs.tensor_ct]);
+        }
+
+        fn equalStructure(lhs: anytype, rhs: @TypeOf(lhs)) bool {
+            const T = @TypeOf(lhs);
+            switch (@typeInfo(T)) {
+                .@"struct" => |info| {
+                    if (info.layout == .@"packed") return lhs == rhs;
+                    inline for (info.field_names) |name| {
+                        if (!equalStructure(@field(lhs, name), @field(rhs, name))) return false;
+                    }
+                    return true;
+                },
+                .@"union" => |info| {
+                    const Tag = info.tag_type orelse return std.meta.eql(lhs, rhs);
+                    const lhs_tag: Tag = lhs;
+                    const rhs_tag: Tag = rhs;
+                    if (lhs_tag != rhs_tag) return false;
+                    return switch (lhs) {
+                        inline else => |value, tag| equalStructure(value, @field(rhs, @tagName(tag))),
+                    };
+                },
+                .array => {
+                    for (lhs, rhs) |left, right| {
+                        if (!equalStructure(left, right)) return false;
+                    }
+                    return true;
+                },
+                .pointer => |info| {
+                    if (info.size != .slice) return lhs == rhs;
+                    if (lhs.len != rhs.len) return false;
+                    if (lhs.ptr == rhs.ptr) return true;
+                    for (lhs, rhs) |left, right| {
+                        if (!equalStructure(left, right)) return false;
+                    }
+                    return true;
+                },
+                .optional => {
+                    const left = lhs orelse return rhs == null;
+                    const right = rhs orelse return false;
+                    return equalStructure(left, right);
+                },
+                else => return std.meta.eql(lhs, rhs),
+            }
         }
 
         fn tieBreak(candidate: *const Candidate, current: *const Candidate) bool {
@@ -422,6 +476,57 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
         const CandidateType = PlanCandidate(capacity);
         const Result = SearchResult(capacity);
         const max_representation_candidates = 24;
+
+        /// Geometry and execution work are unchanged by node scheduling.
+        const InvariantCost = struct {
+            arithmetic_work: u128 = 0,
+            access_work: u128 = 0,
+            register_pressure_work: u128 = 0,
+            memory_traffic: MemoryTraffic = .{},
+            code_size_units: usize = 0,
+        };
+
+        /// Only identical physical programs can share validation, lifetimes,
+        /// storage, and cost. Search provenance remains specific to each attempt.
+        fn completedMatch(comptime completed: []const ?*const CandidateType, comptime executable: *const Program) ?*const CandidateType {
+            for (completed) |entry| {
+                const candidate = entry.?;
+                if (CandidateSet(capacity).sameExecutable(&candidate.executable, executable)) return candidate;
+            }
+            return null;
+        }
+
+        /// A schedule's node order completely determines reordering of the
+        /// same base program, regardless of the policy that produced it.
+        fn earlierSchedule(comptime schedules: anytype, comptime index: usize) ?usize {
+            const current = schedules[index];
+            for (0..index) |earlier| {
+                const prior = schedules[earlier];
+                if (current.node_count == prior.node_count and
+                    std.mem.eql(usize, current.node_ids[0..current.node_count], prior.node_ids[0..prior.node_count]))
+                {
+                    return earlier;
+                }
+            }
+            return null;
+        }
+
+        fn withProvenance(
+            comptime completed: *const CandidateType,
+            comptime origin: Origin,
+            comptime fusion_regime: ?Analysis.FusionRegime,
+            comptime layout_regime: ?Analysis.LayoutRegime,
+            comptime remap_regime: ?Analysis.RemapRegime,
+            comptime schedule: Scheduling.Kind,
+        ) CandidateType {
+            var candidate = completed.*;
+            candidate.origin = origin;
+            candidate.fusion_regime = fusion_regime;
+            candidate.layout_regime = layout_regime;
+            candidate.remap_regime = remap_regime;
+            candidate.schedule = schedule;
+            return candidate;
+        }
 
         const Representation = struct {
             fusion_regions: Analysis.FusionSelection(capacity.max_nodes) = .{},
@@ -558,14 +663,13 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
         };
 
         pub fn search(
-            comptime SourceKey: type,
+            comptime SourcePlan: type,
             comptime SemanticValidated: type,
             comptime semantic_analysis: SemanticFacts,
             comptime fusion_candidates: FusionCandidates,
             comptime layout_candidates: LayoutCandidates,
             comptime remap_candidates: RemapCandidates,
             comptime contraction_candidates: Analysis.ContractionCandidates(capacity),
-            comptime source_configuration: anytype,
             comptime output_binding: Output.Binding,
             comptime diagnostics: Diagnostics.Options,
             comptime options: Options,
@@ -590,6 +694,8 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             result.remap_candidate_count = remap_candidates.count;
             result.contraction_candidate_count = contraction_candidates.count;
             result.generated_contraction_strategies = @splat(false);
+            var completed: [options.max_executables]?*const CandidateType = @splat(null);
+            var completed_count: usize = 0;
 
             Trace.begin(.search_reference);
             if (!masked_fusion_required) {
@@ -600,26 +706,49 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                     @min(3, @max(1, options.max_executables - 1)),
                 );
                 Trace.end(.reference_scheduling, .{ .schedules = reference_schedules.len });
+                Trace.begin(.reference_construction);
+                const reference_program = Scheduling.Reference(capacity).plan(SemanticValidated.graph, reference_schedules[0]);
+                Trace.end(.reference_construction, .{ .nodes = reference_program.node_ct, .program_bytes = @sizeOf(@TypeOf(reference_program)) });
+                Trace.begin(.candidate_validation);
+                _ = validation.FinalValidation(capacity).validate(reference_program);
+                Trace.end(.candidate_validation, .{ .origin = Origin.reference, .nodes = reference_program.node_ct });
+                Trace.begin(.candidate_outputs);
+                const ReferenceOutputs = Output.Plan(reference_program, output_binding);
+                Trace.end(.candidate_outputs, .{ .origin = Origin.reference, .plan_type_bytes = @sizeOf(ReferenceOutputs) });
+                const reference_persistent_bytes = persistentBytes(reference_program, SourcePlan, ReferenceOutputs);
+                Trace.begin(.reference_cost);
+                const reference_invariant = estimateInvariant(reference_program);
+                Trace.end(.reference_cost, .{ .arithmetic = reference_invariant.arithmetic_work, .access = reference_invariant.access_work, .register_pressure = reference_invariant.register_pressure_work });
+                var reference_candidates: [reference_schedules.len]?*const CandidateType = @splat(null);
                 inline for (reference_schedules, 0..) |schedule, schedule_index| {
                     // Reserve a slot for the greedy optimized anchor when capped.
                     if (result.generated_count >= @max(1, options.max_executables - 1)) break;
-                    Trace.begin(.reference_construction);
-                    const executable = Scheduling.Reference(capacity).plan(SemanticValidated.graph, schedule);
-                    Trace.end(.reference_construction, .{ .nodes = executable.node_ct, .program_bytes = @sizeOf(@TypeOf(executable)) });
-                    const candidate = complete(
-                        SourceKey,
-                        executable,
-                        .reference,
-                        null,
-                        null,
-                        null,
-                        schedule.kind,
-                        source_configuration,
-                        output_binding,
-                        diagnostics,
-                    );
+                    const completed_before = completed_count;
+                    const candidate = if (earlierSchedule(reference_schedules, schedule_index)) |earlier|
+                        withProvenance(reference_candidates[earlier].?, .reference, null, null, null, schedule.kind)
+                    else blk: {
+                        const executable = if (schedule_index == 0) reference_program else built: {
+                            Trace.begin(.reference_construction);
+                            const value = Scheduling.Reference(capacity).plan(SemanticValidated.graph, schedule);
+                            Trace.end(.reference_construction, .{ .nodes = value.node_ct, .program_bytes = @sizeOf(@TypeOf(value)) });
+                            break :built value;
+                        };
+                        if (completedMatch(completed[0..completed_count], &executable)) |match| {
+                            break :blk withProvenance(match, .reference, null, null, null, schedule.kind);
+                        }
+                        const fresh = complete(SourcePlan, ReferenceOutputs, executable, reference_invariant, reference_persistent_bytes, .reference, null, null, null, schedule.kind, diagnostics);
+                        const retained = fresh;
+                        completed[completed_count] = &retained;
+                        completed_count += 1;
+                        break :blk fresh;
+                    };
+                    const retained = candidate;
+                    reference_candidates[schedule_index] = &retained;
                     if (schedule_index == 0) result.reference = candidate;
-                    result.frontier.insert(candidate);
+                    if (completed_count != completed_before)
+                        result.frontier.insertDistinct(candidate)
+                    else
+                        result.frontier.insert(candidate);
                     result.generated_count += 1;
                 }
             }
@@ -632,14 +761,20 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 // The compatible anchor goes first, then locally ranked alternatives.
                 const representation = representations.values[representation_index].?;
                 if (masked_fusion_required and !respectsMaskedFusion(SemanticValidated.graph, semantic_analysis, representation.fusion_regions)) continue;
+                const fusion_regime = representation.fusionRegime();
+                const layout_regime = representation.layoutRegime(layout_candidates);
+                const remap_regime = representation.remapRegime();
                 Trace.begin(.search_layout);
-                const layout_graph = Analysis.LayoutAnalysis(capacity).applySelection(
-                    SemanticValidated.graph,
-                    representation.layout_regions,
-                );
+                const layout_graph = if (representation.layout_regions.region_count == 0)
+                    SemanticValidated.graph
+                else
+                    Analysis.LayoutAnalysis(capacity).applySelection(SemanticValidated.graph, representation.layout_regions);
                 Trace.end(.search_layout, .{ .representation = representation_index, .nodes = layout_graph.node_ct });
                 Trace.begin(.search_validation);
-                const LayoutValidated = validation.Validation(capacity).validate(layout_graph);
+                const LayoutValidated = if (representation.layout_regions.region_count == 0)
+                    SemanticValidated
+                else
+                    validation.Validation(capacity).validate(layout_graph);
                 Trace.end(.search_validation, .{ .representation = representation_index, .nodes = LayoutValidated.graph.node_ct });
                 Trace.begin(.search_lowering);
                 const base_executable = Planning.Lowering(capacity).lower(
@@ -650,6 +785,16 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                     representation.contraction_strategies,
                 );
                 Trace.end(.search_lowering, .{ .representation = representation_index, .nodes = base_executable.node_ct });
+                Trace.begin(.candidate_validation);
+                _ = validation.FinalValidation(capacity).validate(base_executable);
+                Trace.end(.candidate_validation, .{ .origin = Origin.planned, .representation = representation_index, .nodes = base_executable.node_ct });
+                Trace.begin(.candidate_outputs);
+                const RepresentationOutputs = Output.Plan(base_executable, output_binding);
+                Trace.end(.candidate_outputs, .{ .origin = Origin.planned, .representation = representation_index, .plan_type_bytes = @sizeOf(RepresentationOutputs) });
+                const representation_persistent_bytes = persistentBytes(base_executable, SourcePlan, RepresentationOutputs);
+                Trace.begin(.representation_cost);
+                const invariant_cost = estimateInvariant(base_executable);
+                Trace.end(.representation_cost, .{ .representation = representation_index, .arithmetic = invariant_cost.arithmetic_work, .access = invariant_cost.access_work, .register_pressure = invariant_cost.register_pressure_work });
                 for (base_executable.nodes[0..base_executable.node_ct]) |maybe_node| {
                     const node = maybe_node.?;
                     const compute = switch (node.op) {
@@ -668,23 +813,56 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                 Trace.begin(.search_scheduling);
                 const schedules = Scheduling.ExecutableScheduling(capacity).enumerateLimited(base_executable, @min(3, options.max_executables - result.generated_count));
                 Trace.end(.search_scheduling, .{ .representation = representation_index, .schedules = schedules.len });
-                inline for (schedules) |schedule| {
+                var scheduled_candidates: [schedules.len]?*const CandidateType = @splat(null);
+                inline for (schedules, 0..) |schedule, schedule_index| {
                     if (result.generated_count >= options.max_executables) break;
-                    const executable = Scheduling.ExecutableScheduling(capacity).apply(base_executable, schedule);
-                    const candidate = complete(
-                        SourceKey,
-                        executable,
-                        .planned,
-                        representation.fusionRegime(),
-                        representation.layoutRegime(layout_candidates),
-                        representation.remapRegime(),
-                        schedule.kind,
-                        source_configuration,
-                        output_binding,
-                        diagnostics,
-                    );
+                    const completed_before = completed_count;
+                    const candidate = if (earlierSchedule(schedules, schedule_index)) |earlier|
+                        withProvenance(
+                            scheduled_candidates[earlier].?,
+                            .planned,
+                            fusion_regime,
+                            layout_regime,
+                            remap_regime,
+                            schedule.kind,
+                        )
+                    else blk: {
+                        const executable = Scheduling.ExecutableScheduling(capacity).apply(base_executable, schedule);
+                        if (completedMatch(completed[0..completed_count], &executable)) |match| {
+                            break :blk withProvenance(
+                                match,
+                                .planned,
+                                fusion_regime,
+                                layout_regime,
+                                remap_regime,
+                                schedule.kind,
+                            );
+                        }
+                        const fresh = complete(
+                            SourcePlan,
+                            RepresentationOutputs,
+                            executable,
+                            invariant_cost,
+                            representation_persistent_bytes,
+                            .planned,
+                            fusion_regime,
+                            layout_regime,
+                            remap_regime,
+                            schedule.kind,
+                            diagnostics,
+                        );
+                        const retained = fresh;
+                        completed[completed_count] = &retained;
+                        completed_count += 1;
+                        break :blk fresh;
+                    };
+                    const retained = candidate;
+                    scheduled_candidates[schedule_index] = &retained;
                     if (result.generated_count == 0) result.reference = candidate;
-                    result.frontier.insert(candidate);
+                    if (completed_count != completed_before)
+                        result.frontier.insertDistinct(candidate)
+                    else
+                        result.frontier.insert(candidate);
                     result.generated_count += 1;
                 }
             }
@@ -1113,86 +1291,65 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
         }
 
         fn complete(
-            comptime SourceKey: type,
+            comptime SourcePlan: type,
+            comptime OutputPlan: type,
             comptime executable: Program,
+            comptime invariant: InvariantCost,
+            comptime persistent_memory_bytes: usize,
             comptime origin: Origin,
             comptime fusion_regime: ?Analysis.FusionRegime,
             comptime layout_regime: ?Analysis.LayoutRegime,
             comptime remap_regime: ?Analysis.RemapRegime,
             comptime schedule: Scheduling.Kind,
-            comptime source_configuration: anytype,
-            comptime output_binding: Output.Binding,
             comptime diagnostics: Diagnostics.Options,
         ) CandidateType {
             const Trace = Diagnostics.Trace(diagnostics);
-            Trace.begin(.candidate_validation);
-            const Validated = validation.FinalValidation(capacity).validate(executable);
-            Trace.end(.candidate_validation, .{ .origin = origin, .schedule = schedule, .nodes = Validated.graph.node_ct });
             Trace.begin(.candidate_lifetimes);
-            const lifetimes = LifetimeAnalysis().analyze(Validated);
+            const lifetimes = LifetimeAnalysis().analyze(executable);
             Trace.end(.candidate_lifetimes, .{ .tensors = lifetimes.tensor_lifetimes.len });
-            Trace.begin(.candidate_sources);
-            const SourcePlan = Source.Plan(SourceKey, capacity, executable, source_configuration);
-            Trace.end(.candidate_sources, .{ .plan_type_bytes = @sizeOf(SourcePlan) });
-            Trace.begin(.candidate_outputs);
-            const OutputPlan = Output.Plan(executable, output_binding);
-            Trace.end(.candidate_outputs, .{ .plan_type_bytes = @sizeOf(OutputPlan) });
             Trace.begin(.candidate_storage);
             const MemoryPlan = Storage.MemoryPlan(capacity, executable, lifetimes, SourcePlan, OutputPlan);
             Trace.end(.candidate_storage, .{ .bytes = MemoryPlan.byte_count });
             Trace.begin(.candidate_cost);
-            const memory_traffic = estimateMemoryTraffic(executable);
-            const arithmetic_work = estimateRuntime(executable);
-            const access_work = estimateAccess(executable);
-            const register_pressure_work = estimateRegisterPressure(executable);
-            const transfer_work = memoryTransferWork(memory_traffic);
-            const persistent_memory_bytes = persistentBytes(executable, lifetimes, SourcePlan, OutputPlan);
+            const transfer_work = memoryTransferWork(invariant.memory_traffic);
 
-            Trace.end(.candidate_cost, .{ .origin = origin, .schedule = schedule, .arithmetic = arithmetic_work, .access = access_work, .register_pressure = register_pressure_work, .transfer = transfer_work });
+            Trace.end(.candidate_cost, .{ .origin = origin, .schedule = schedule, .arithmetic = invariant.arithmetic_work, .access = invariant.access_work, .register_pressure = invariant.register_pressure_work, .transfer = transfer_work });
 
             return .{
                 .executable = executable,
+                .lifetimes = &lifetimes.tensor_lifetimes,
+                .storage = MemoryPlan.snapshot,
+                .outputs = .{ .binding = OutputPlan.output_binding, .root_output_indices = &OutputPlan.root_output_indices },
                 .origin = origin,
                 .fusion_regime = fusion_regime,
                 .layout_regime = layout_regime,
                 .remap_regime = remap_regime,
                 .schedule = schedule,
                 .cost = .{
-                    .estimated_runtime_work = arithmetic_work + access_work + register_pressure_work + transfer_work,
-                    .arithmetic_work = arithmetic_work,
-                    .access_work = access_work,
-                    .register_pressure_work = register_pressure_work,
+                    .estimated_runtime_work = invariant.arithmetic_work + invariant.access_work + invariant.register_pressure_work + transfer_work,
+                    .arithmetic_work = invariant.arithmetic_work,
+                    .access_work = invariant.access_work,
+                    .register_pressure_work = invariant.register_pressure_work,
                     .transfer_work = transfer_work,
-                    .memory_traffic = memory_traffic,
+                    .memory_traffic = invariant.memory_traffic,
                     .peak_memory_bytes = MemoryPlan.byte_count,
                     .persistent_memory_bytes = persistent_memory_bytes,
                     .scratch_memory_bytes = MemoryPlan.byte_count - persistent_memory_bytes,
-                    .code_size_units = codeSize(executable),
+                    .code_size_units = invariant.code_size_units,
                 },
             };
         }
 
-        fn estimateRuntime(comptime program: Program) u128 {
-            var work: u128 = 0;
-            for (0..program.node_ct) |node_id| {
-                const node = program.nodes[node_id].?;
-                switch (node.op) {
-                    .view => continue,
-                    .compute => |compute| work += invocationArithmetic(program, node, compute),
-                }
-            }
-            return work;
-        }
-
-        fn estimateAccess(comptime program: Program) u128 {
-            var work: u128 = 0;
+        fn estimateInvariant(comptime program: Program) InvariantCost {
+            var result: InvariantCost = .{ .code_size_units = program.node_ct };
             for (0..program.node_ct) |node_id| {
                 const node = program.nodes[node_id].?;
                 const compute = switch (node.op) {
                     .view => continue,
                     .compute => |value| value,
                 };
-                work += switch (compute) {
+                result.arithmetic_work += invocationArithmetic(program, node, compute);
+                result.access_work += switch (compute) {
                     .direct => |semantic| if (semantic == .matmul)
                         contractionAccessWork(program, node, .scalar)
                     else
@@ -1203,8 +1360,18 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
                         .contraction => |plan| contractionAccessWork(program, node, plan.strategy),
                     },
                 };
+                result.register_pressure_work += registerPressureForNode(program, node, compute);
+                result.code_size_units += codeSizeForNode(compute);
+                for (0..node.input_count) |input_index| {
+                    const tensor_id = program.input_refs[node.input_start + input_index].?;
+                    result.memory_traffic.bytes_read += tensorBytes(program.tensors[tensor_id].?);
+                }
+                for (0..node.output_count) |output_index| {
+                    const tensor_id = program.output_refs[node.output_start + output_index].?;
+                    result.memory_traffic.bytes_written += tensorBytes(program.tensors[tensor_id].?);
+                }
             }
-            return work;
+            return result;
         }
 
         fn directAccessWork(comptime program: Program, comptime node: Program.Invocation) u128 {
@@ -1326,89 +1493,63 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             return if (stride == 0 or stride == 1) 1 else 3;
         }
 
-        fn estimateRegisterPressure(comptime program: Program) u128 {
+        fn registerPressureForNode(comptime program: Program, comptime node: Program.Invocation, comptime compute: Execution.ExecutableCompute) u128 {
             var work: u128 = 0;
-            for (0..program.node_ct) |node_id| {
-                const node = program.nodes[node_id].?;
-                const compute = switch (node.op) {
-                    .view => continue,
-                    .compute => |value| value,
-                };
-                const kernel = switch (compute) {
-                    .direct => continue,
-                    .kernel => |value| value,
-                };
-                switch (kernel) {
-                    .map => |plan| {
-                        const expression = switch (plan.region.body) {
-                            .expression, .expression_transfer => |value| value,
-                            .transfer => continue,
-                        };
-                        const demand = Analysis.Cost.peakLiveValues(expression) +
-                            Analysis.Cost.maxArity(expression) + @min(node.input_count, 3) + 1;
-                        switch (plan.strategy) {
-                            .traversal => |traversal| {
-                                const width = if (traversal.vector_axis != null) traversal.vector_width else 1;
-                                const steps = domainSteps(plan.region.domain.shape, traversal.vector_axis, width);
+            const kernel = switch (compute) {
+                .direct => return 0,
+                .kernel => |value| value,
+            };
+            switch (kernel) {
+                .map => |plan| {
+                    const expression = switch (plan.region.body) {
+                        .expression, .expression_transfer => |value| value,
+                        .transfer => return 0,
+                    };
+                    const expression_facts = Analysis.Cost.expressionFacts(expression);
+                    const demand = expression_facts.peak_live_values +
+                        expression_facts.max_arity + @min(node.input_count, 3) + 1;
+                    switch (plan.strategy) {
+                        .traversal => |traversal| {
+                            const width = if (traversal.vector_axis != null) traversal.vector_width else 1;
+                            const steps = domainSteps(plan.region.domain.shape, traversal.vector_axis, width);
+                            work += Analysis.Cost.registerPressureWork(steps, width, demand);
+                        },
+                        .segmented => |segmented| {
+                            for (segmented.segments) |segment| {
+                                const width = if (expressionSegmentVectorizes(program, node, expression, segment, segmented.vector_width))
+                                    segmented.vector_width
+                                else
+                                    1;
+                                const steps = vectorSteps(segment.elementCount(), width);
                                 work += Analysis.Cost.registerPressureWork(steps, width, demand);
-                            },
-                            .segmented => |segmented| {
-                                for (segmented.segments) |segment| {
-                                    const width = if (expressionSegmentVectorizes(program, node, expression, segment, segmented.vector_width))
-                                        segmented.vector_width
-                                    else
-                                        1;
-                                    const steps = vectorSteps(segment.elementCount(), width);
-                                    work += Analysis.Cost.registerPressureWork(steps, width, demand);
-                                }
-                            },
-                            .loop => |loop_plan| {
-                                const steps = vectorSteps(product(plan.region.domain.shape), loop_plan.vector_width);
-                                work += Analysis.Cost.registerPressureWork(steps, loop_plan.vector_width, demand);
-                            },
-                        }
-                    },
-                    .reduction => |plan| {
-                        const expression = plan.region.expressions;
-                        const width = plan.traversal_plan.vector_width;
-                        const accumulator_demand = plan.region.accumulators.len * (if (width > 1) @as(usize, 2) else 1);
-                        var selection_demand: usize = 0;
-                        for (plan.region.accumulators) |accumulator| {
-                            selection_demand += switch (accumulator.selection) {
-                                .none => 0,
-                                .masked => 1 + @as(usize, @intFromBool(accumulator.finalize == .mean)),
-                            };
-                        }
-                        const demand = Analysis.Cost.peakLiveValues(expression) +
-                            Analysis.Cost.maxArity(expression) + @min(node.input_count, 3) + accumulator_demand + selection_demand;
-                        const steps = domainSteps(plan.region.domain.shape, plan.traversal_plan.vector_axis, width);
-                        work += Analysis.Cost.registerPressureWork(steps, width, demand);
-                    },
-                    .contraction => {},
-                }
+                            }
+                        },
+                        .loop => |loop_plan| {
+                            const steps = vectorSteps(product(plan.region.domain.shape), loop_plan.vector_width);
+                            work += Analysis.Cost.registerPressureWork(steps, loop_plan.vector_width, demand);
+                        },
+                    }
+                },
+                .reduction => |plan| {
+                    const expression = plan.region.expressions;
+                    const width = plan.traversal_plan.vector_width;
+                    const accumulator_demand = plan.region.accumulators.len * (if (width > 1) @as(usize, 2) else 1);
+                    var selection_demand: usize = 0;
+                    for (plan.region.accumulators) |accumulator| {
+                        selection_demand += switch (accumulator.selection) {
+                            .none => 0,
+                            .masked => 1 + @as(usize, @intFromBool(accumulator.finalize == .mean)),
+                        };
+                    }
+                    const expression_facts = Analysis.Cost.expressionFacts(expression);
+                    const demand = expression_facts.peak_live_values +
+                        expression_facts.max_arity + @min(node.input_count, 3) + accumulator_demand + selection_demand;
+                    const steps = domainSteps(plan.region.domain.shape, plan.traversal_plan.vector_axis, width);
+                    work += Analysis.Cost.registerPressureWork(steps, width, demand);
+                },
+                .contraction => {},
             }
             return work;
-        }
-
-        fn estimateMemoryTraffic(comptime program: Program) MemoryTraffic {
-            var traffic: MemoryTraffic = .{};
-            for (0..program.node_ct) |node_id| {
-                const node = program.nodes[node_id].?;
-                switch (node.op) {
-                    .view => continue,
-                    .compute => {
-                        for (0..node.input_count) |input_index| {
-                            const tensor_id = program.input_refs[node.input_start + input_index].?;
-                            traffic.bytes_read += tensorBytes(program.tensors[tensor_id].?);
-                        }
-                        for (0..node.output_count) |output_index| {
-                            const tensor_id = program.output_refs[node.output_start + output_index].?;
-                            traffic.bytes_written += tensorBytes(program.tensors[tensor_id].?);
-                        }
-                    },
-                }
-            }
-            return traffic;
         }
 
         fn tensorBytes(comptime info: Program.TensorInfo) u128 {
@@ -1838,59 +1979,57 @@ pub fn ExecutableSearch(comptime capacity: Graph.Capacity) type {
             return result;
         }
 
-        fn persistentBytes(comptime program: Program, comptime lifetimes: anytype, comptime SourcePlan: type, comptime OutputPlan: type) usize {
+        fn persistentBytes(comptime program: Program, comptime SourcePlan: type, comptime OutputPlan: type) usize {
+            var output_roots: [program.tensor_ct]bool = @splat(false);
+            for (program.outputs[0..program.output_ct]) |output_id| {
+                output_roots[program.tensors[output_id.?].?.storage_tensor] = true;
+            }
             var bytes: usize = 0;
             for (0..program.tensor_ct) |tensor_id| {
                 if (!program.materialized[tensor_id]) continue;
                 const info = program.tensors[tensor_id].?;
                 if (info.storage_tensor != tensor_id or !SourcePlan.isOwned(info) or OutputPlan.isBoundRoot(tensor_id)) continue;
-                if (lifetimes.tensor_lifetimes[tensor_id].isPersistent()) {
+                if (info.origin != .node or output_roots[tensor_id]) {
                     bytes += info.shape.elementCount() * info.dtype.byteSize();
                 }
             }
             return bytes;
         }
 
-        fn codeSize(comptime program: Program) usize {
-            var units = program.node_ct;
-            for (0..program.node_ct) |node_id| {
-                const node = program.nodes[node_id].?;
-                switch (node.op) {
-                    .view => {},
-                    .compute => |compute| switch (compute) {
-                        .direct => units += 1,
-                        .kernel => |kernel| switch (kernel) {
-                            .map => |plan| switch (plan.strategy) {
-                                .traversal => switch (plan.region.body) {
-                                    .expression => |expression| units += expression.instructions.len,
-                                    .transfer, .expression_transfer => unreachable,
-                                },
-                                .segmented => |segmented| {
-                                    units += segmented.segments.len;
-                                    if (plan.region.body == .expression_transfer) {
-                                        units += plan.region.body.expression_transfer.instructions.len;
-                                    }
-                                },
-                                .loop => |loop_plan| {
-                                    units += loop_plan.iterations.len;
-                                    if (plan.region.body == .expression_transfer) {
-                                        units += plan.region.body.expression_transfer.instructions.len;
-                                    }
-                                },
-                            },
-                            .reduction => |plan| {
-                                units += plan.region.expressions.instructions.len + plan.region.accumulators.len;
-                                for (plan.region.accumulators) |accumulator| {
-                                    units += switch (accumulator.selection) {
-                                        .none => 0,
-                                        .masked => 2,
-                                    };
-                                }
-                            },
-                            .contraction => units += 1,
+        fn codeSizeForNode(comptime compute: Execution.ExecutableCompute) usize {
+            var units: usize = 0;
+            switch (compute) {
+                .direct => units += 1,
+                .kernel => |kernel| switch (kernel) {
+                    .map => |plan| switch (plan.strategy) {
+                        .traversal => switch (plan.region.body) {
+                            .expression => |expression| units += expression.instructions.len,
+                            .transfer, .expression_transfer => unreachable,
+                        },
+                        .segmented => |segmented| {
+                            units += segmented.segments.len;
+                            if (plan.region.body == .expression_transfer) {
+                                units += plan.region.body.expression_transfer.instructions.len;
+                            }
+                        },
+                        .loop => |loop_plan| {
+                            units += loop_plan.iterations.len;
+                            if (plan.region.body == .expression_transfer) {
+                                units += plan.region.body.expression_transfer.instructions.len;
+                            }
                         },
                     },
-                }
+                    .reduction => |plan| {
+                        units += plan.region.expressions.instructions.len + plan.region.accumulators.len;
+                        for (plan.region.accumulators) |accumulator| {
+                            units += switch (accumulator.selection) {
+                                .none => 0,
+                                .masked => 2,
+                            };
+                        }
+                    },
+                    .contraction => units += 1,
+                },
             }
             return units;
         }

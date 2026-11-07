@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Graph = @import("graph.zig");
-const Storage = @import("../storage/storage.zig");
 const Tensor = @import("tensor.zig");
 const ScalarValue = @import("../storage/dtype.zig").ScalarValue;
 
@@ -87,10 +86,11 @@ pub fn Executable(
     comptime lifetimes: anytype,
     comptime SourcePlan: type,
     comptime OutputPlan: type,
+    comptime MemoryPlan: type,
     comptime source_name_table: []const [:0]const u8,
 ) type {
     const graph = Validated.graph;
-    const plan = Storage.MemoryPlan(capacities, graph, lifetimes, SourcePlan, OutputPlan);
+    const plan = MemoryPlan;
     return struct {
         pub const SourceKeyType = SourceKey;
         pub const SourceError = error{SourceSizeMismatch};
@@ -124,6 +124,9 @@ pub fn Executable(
             const selected = executable_search.selected(selection);
             break :candidate @import("../compiler/search.zig").PlanCandidate(capacities){
                 .executable = graph,
+                .lifetimes = selected.lifetimes,
+                .storage = selected.storage,
+                .outputs = selected.outputs,
                 .origin = selected.origin,
                 .fusion_regime = selected.fusion_regime,
                 .layout_regime = selected.layout_regime,

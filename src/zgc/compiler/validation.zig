@@ -126,6 +126,13 @@ pub fn FinalValidation(comptime capacity: Graph.Capacity) type {
                 }
             }
 
+            return assumeValidated(executable);
+        }
+
+        /// Selection only changes a validated program's array capacities;
+        /// active nodes, references, and tensor metadata are copied unchanged.
+        pub fn assumeValidated(comptime executable: anytype) type {
+            const Program = @TypeOf(executable);
             return struct {
                 pub const graph = executable;
 

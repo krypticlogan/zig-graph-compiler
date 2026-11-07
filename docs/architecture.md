@@ -165,21 +165,26 @@ compatible operations in the propagated regime.
 
 Executable search also preserves an unfused, generic lowering as the legal
 reference. It generates semantic-order, memory-pressure, and critical-path
-schedules for the reference and for every physical combination. Each completed
-candidate receives final validation, lifetime analysis, source planning, and
-memory planning before costing.
+schedules for the reference and for every physical combination. Each lowered
+representation is validated once and receives one output binding plan.
+Canonical-layout representations reuse semantic validation. Distinct scheduled
+programs receive lifetime analysis and memory planning; identical programs
+reuse completed plans. Source bindings are validated once from the semantic
+graph. Geometry- and layout-dependent cost facts and persistent storage are
+computed once per lowered representation and reused across its schedules.
 
 A `PlanCandidate` associates an `Executable` and `Schedule` with its origin and
 a structured cost containing estimated runtime work, ordinary read/write
 traffic, peak and persistent memory, scratch, code size, and conversion cost.
-Representation composition retains at most eight locally useful partial
+Representation composition retains at most 24 locally useful partial
 representations before lowering. The executable search then retains at most 16
 completed candidates on a Pareto frontier and applies deterministic
 tie-breaking. When the frontier is full, a stronger incomparable candidate may
 replace the weakest retained candidate. Equal-cost physical choices favor
 analyzed fusion, propagated layouts, and composed remaps. The selected
-candidate becomes the model's active executable and receives the final model
-lifetime and storage plan.
+candidate becomes the active executable. Capacity compaction preserves its
+validated operations and reuses its lifetime, output binding, and storage
+plans; it does not validate or allocate the selected program again.
 
 Semantic compute nodes use the operation representation in `operations/`.
 Executable compute nodes retain unchanged operations as `direct` semantic
@@ -213,8 +218,8 @@ rewrite provenance, the active `executable`, the generic
 `reference_executable_candidate`, the
 `executable_candidate_frontier`, and `selected_executable_candidate` as
 compile-time inspection metadata. Fusion, layout, remap, and generated
-executable candidate counts are also retained. A final validated program
-provides mutable and read-only tensor view types
+executable candidate counts are also retained. The selected program is
+validated before compaction and provides mutable and read-only tensor view types
 whose shape, strides, base offset, element count, and layout traits are
 compile-time properties.
 
@@ -399,8 +404,8 @@ array representation. Identity schedules reuse the existing program directly.
 The executable frontier and its eviction pool store immutable candidate
 references. Comparisons borrow candidates/programs instead of passing full
 program values. Frontier snapshots therefore copy references and keep their
-previous candidate records intact after replacement. `selected()` still returns
-the selected candidate value; frontier entries are read-only references.
+previous candidate records intact after replacement. `selected()` borrows the
+chosen candidate; frontier entries are read-only references.
 
 Reference and physical scheduling compute only the policy prefix that fits the
 remaining executable allowance. A one-slot prefix uses the known dependency
