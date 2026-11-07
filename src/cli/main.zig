@@ -3,7 +3,47 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const timing = @import("time.zig");
 const Library = @import("library.zig").Library;
-const search_defaults: @import("zgc").compile.SearchOptions = .{};
+const zgc = @import("zgc");
+const search_defaults: zgc.compile.SearchOptions = .{};
+
+const Command = enum { inspect, cache, compile, time };
+const CacheAction = enum { path, clear };
+const CacheOption = enum { @"--cache-dir" };
+const InspectSection = enum(u32) {
+    all = 0,
+    summary = 1,
+    @"raw-graph" = 2,
+    @"semantic-graph" = 3,
+    executable = 4,
+    representations = 5,
+    tree = 6,
+    @"memory-plan" = 7,
+};
+const TimeOption = enum { @"--runs", @"--warmup-ms", @"--warmup-iterations", @"--sample-ms", @"--iterations", @"--out" };
+const CompileOption = enum {
+    @"-o",
+    @"--output",
+    @"-O",
+    @"--optimize",
+    @"--target",
+    @"--cpu",
+    @"--selection-target",
+    @"--frontier-index",
+    @"--max-executables",
+    @"--max-composition-attempts",
+    @"--zig",
+    @"--zgc-root",
+    @"--cache-dir",
+    @"--cache-output",
+    @"--inspectable",
+    @"--bind-outputs",
+    @"--name",
+    @"--artifact",
+    @"--import",
+    @"--time",
+};
+const OptimizeMode = enum { Debug, ReleaseSafe, ReleaseFast, ReleaseSmall };
+const HelpAlias = enum { help, @"-h", @"--help" };
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
@@ -18,42 +58,23 @@ pub fn main(init: std.process.Init) !void {
         try usage(stderr);
         return;
     }
-    if (std.mem.eql(u8, args[1], "inspect")) {
-        inspect(init, args[2..], stderr) catch |err| {
-            try stderr.print("zgc inspect failed: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-        return;
-    }
-    if (std.mem.eql(u8, args[1], "cache")) {
-        cache(init, args[2..], stderr) catch |err| {
-            try stderr.print("zgc cache failed: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-        return;
-    }
-    if (std.mem.eql(u8, args[1], "compile")) {
-        compile(init, args[2..], stderr) catch |err| {
-            try stderr.print("zgc compile failed: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-        return;
-    }
-    if (std.mem.eql(u8, args[1], "time")) {
-        timeCommand(init, args[2..], stderr) catch |err| {
-            try stderr.print("zgc time failed: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-        return;
-    }
-    try stderr.print("unknown command: {s}\n\n", .{args[1]});
-    try usage(stderr);
-    try stderr.flush();
-    std.process.exit(2);
+    const command = std.meta.stringToEnum(Command, args[1]) orelse {
+        try stderr.print("unknown command: {s}\n\n", .{args[1]});
+        try usage(stderr);
+        try stderr.flush();
+        std.process.exit(2);
+    };
+    const result = switch (command) {
+        .inspect => inspect(init, args[2..], stderr),
+        .cache => cache(init, args[2..], stderr),
+        .compile => compile(init, args[2..], stderr),
+        .time => timeCommand(init, args[2..], stderr),
+    };
+    result catch |err| {
+        try stderr.print("zgc {s} failed: {s}\n", .{ @tagName(command), @errorName(err) });
+        try stderr.flush();
+        std.process.exit(1);
+    };
 }
 
 fn cachePath(init: std.process.Init, configured: ?[]const u8) ![]const u8 {
@@ -75,27 +96,31 @@ fn cache(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Write
     var configured: ?[]const u8 = null;
     var index: usize = 1;
     while (index < args.len) : (index += 1) {
-        if (!std.mem.eql(u8, args[index], "--cache-dir")) return error.InvalidCacheOption;
+        if (std.meta.stringToEnum(CacheOption, args[index]) == null) return error.InvalidCacheOption;
         index += 1;
         if (index == args.len) return error.MissingCachePath;
         configured = args[index];
     }
     const path = try cachePath(init, configured);
-    if (std.mem.eql(u8, args[0], "path")) {
-        var stdout_buffer: [4096]u8 = undefined;
-        var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
-        try stdout_writer.interface.print("{s}\n", .{path});
-        try stdout_writer.interface.flush();
-    } else if (std.mem.eql(u8, args[0], "clear")) {
-        const cwd = try std.process.currentPathAlloc(init.io, init.arena.allocator());
-        if (std.mem.eql(u8, path, cwd) or std.mem.eql(u8, path, std.fs.path.sep_str)) return error.UnsafeCachePath;
-        if (init.environ_map.get("HOME")) |home| {
-            if (std.mem.eql(u8, path, home)) return error.UnsafeCachePath;
-        }
-        try std.Io.Dir.deleteTree(.cwd(), init.io, path);
-    } else {
+    const action = std.meta.stringToEnum(CacheAction, args[0]) orelse {
         try cacheUsage(stderr);
         return error.InvalidCacheAction;
+    };
+    switch (action) {
+        .path => {
+            var stdout_buffer: [4096]u8 = undefined;
+            var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+            try stdout_writer.interface.print("{s}\n", .{path});
+            try stdout_writer.interface.flush();
+        },
+        .clear => {
+            const cwd = try std.process.currentPathAlloc(init.io, init.arena.allocator());
+            if (std.mem.eql(u8, path, cwd) or std.mem.eql(u8, path, std.fs.path.sep_str)) return error.UnsafeCachePath;
+            if (init.environ_map.get("HOME")) |home| {
+                if (std.mem.eql(u8, path, home)) return error.UnsafeCachePath;
+            }
+            try std.Io.Dir.deleteTree(.cwd(), init.io, path);
+        },
     }
 }
 
@@ -108,10 +133,10 @@ fn inspect(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
         try inspectUsage(stderr);
         return error.InvalidArguments;
     }
-    const section = if (args.len == 2) inspectSection(args[1]) orelse {
+    const section = if (args.len == 2) std.meta.stringToEnum(InspectSection, args[1]) orelse {
         try inspectUsage(stderr);
         return error.InvalidInspectionSection;
-    } else 0;
+    } else InspectSection.all;
     const allocator = init.arena.allocator();
     const cwd = try std.process.currentPathAlloc(init.io, allocator);
     const library_path = try std.fs.path.resolve(allocator, &.{ cwd, args[0] });
@@ -124,21 +149,13 @@ fn inspect(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
         return error.InspectionUnavailable;
     };
     var required: usize = 0;
-    if (render(section, null, 0, &required) != 0) return error.InspectionFailed;
+    if (render(@backingInt(section), null, 0, &required) != 0) return error.InspectionFailed;
     const bytes = try allocator.alloc(u8, required);
-    if (render(section, bytes.ptr, bytes.len, &required) != 0) return error.InspectionFailed;
+    if (render(@backingInt(section), bytes.ptr, bytes.len, &required) != 0) return error.InspectionFailed;
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
     try stdout_writer.interface.writeAll(bytes[0..required]);
     try stdout_writer.interface.flush();
-}
-
-fn inspectSection(name: []const u8) ?u32 {
-    const sections = [_][]const u8{ "all", "summary", "raw-graph", "semantic-graph", "executable", "representations", "tree", "memory-plan" };
-    for (sections, 0..) |section, index| {
-        if (std.mem.eql(u8, name, section)) return @intCast(index);
-    }
-    return null;
 }
 
 fn timeCommand(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !void {
@@ -153,23 +170,22 @@ fn timeCommand(init: std.process.Init, args: []const []const u8, stderr: *std.Io
             try timeUsage(stderr);
             return;
         }
-        const timing_value = std.mem.eql(u8, arg, "--runs") or
-            std.mem.eql(u8, arg, "--warmup-ms") or
-            std.mem.eql(u8, arg, "--warmup-iterations") or
-            std.mem.eql(u8, arg, "--sample-ms") or
-            std.mem.eql(u8, arg, "--iterations");
-        if (std.mem.eql(u8, arg, "--out")) {
+        if (std.meta.stringToEnum(TimeOption, arg)) |option| {
             index += 1;
-            if (index == args.len) return error.MissingOutputPath;
-            json_path = args[index];
-            continue;
-        }
-        if (timing_value) {
-            index += 1;
-            if (index == args.len) return error.MissingOptionValue;
-            const value = args[index];
-            const number = try std.fmt.parseInt(usize, value, 10);
-            if (std.mem.eql(u8, arg, "--runs")) options.runs = number else if (std.mem.eql(u8, arg, "--warmup-ms")) options.warmup_ms = number else if (std.mem.eql(u8, arg, "--warmup-iterations")) options.warmup_iterations = number else if (std.mem.eql(u8, arg, "--sample-ms")) options.sample_ms = number else options.iterations = number;
+            if (index == args.len) return if (option == .@"--out") error.MissingOutputPath else error.MissingOptionValue;
+            if (option == .@"--out") {
+                json_path = args[index];
+                continue;
+            }
+            const number = try std.fmt.parseInt(usize, args[index], 10);
+            switch (option) {
+                .@"--runs" => options.runs = number,
+                .@"--warmup-ms" => options.warmup_ms = number,
+                .@"--warmup-iterations" => options.warmup_iterations = number,
+                .@"--sample-ms" => options.sample_ms = number,
+                .@"--iterations" => options.iterations = number,
+                .@"--out" => unreachable,
+            }
         } else if (arg.len != 0 and arg[0] == '-') {
             return error.InvalidTimeOption;
         } else if (input == null) {
@@ -195,11 +211,13 @@ fn compile(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Wri
     var filtered: std.ArrayList([]const u8) = .empty;
     var show_time = false;
     for (args) |arg| {
-        if (std.mem.eql(u8, arg, "--time")) {
-            show_time = true;
-        } else {
-            try filtered.append(allocator, arg);
+        if (std.meta.stringToEnum(CompileOption, arg)) |option| {
+            if (option == .@"--time") {
+                show_time = true;
+                continue;
+            }
         }
+        try filtered.append(allocator, arg);
     }
     const start = std.Io.Clock.awake.now(init.io).nanoseconds;
     const output = try compileArtifact(init, filtered.items, stderr) orelse return;
@@ -225,10 +243,10 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     const allocator = init.arena.allocator();
     var input: ?[]const u8 = null;
     var output: ?[]const u8 = null;
-    var optimize: []const u8 = "ReleaseFast";
+    var optimize: OptimizeMode = .ReleaseFast;
     var target: ?[]const u8 = null;
     var cpu: ?[]const u8 = null;
-    var selection_target: []const u8 = "balanced";
+    var selection_target: zgc.OptimizationTarget = .balanced;
     var frontier_index: ?usize = null;
     var max_executables: ?usize = null;
     var max_composition_attempts: ?usize = null;
@@ -248,71 +266,87 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         if (isHelp(arg)) {
             try compileUsage(stderr);
             return null;
-        } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
-            index += 1;
-            if (index == args.len) return error.MissingOutputPath;
-            output = args[index];
-        } else if (std.mem.eql(u8, arg, "-O") or std.mem.eql(u8, arg, "--optimize")) {
-            index += 1;
-            if (index == args.len) return error.MissingOptimizeMode;
-            optimize = args[index];
-        } else if (std.mem.eql(u8, arg, "--target")) {
-            index += 1;
-            if (index == args.len) return error.MissingTarget;
-            target = args[index];
-        } else if (std.mem.eql(u8, arg, "--cpu")) {
-            index += 1;
-            if (index == args.len) return error.MissingCpu;
-            cpu = args[index];
-        } else if (std.mem.eql(u8, arg, "--selection-target")) {
-            index += 1;
-            if (index == args.len) return error.MissingSelectionTarget;
-            selection_target = args[index];
-        } else if (std.mem.eql(u8, arg, "--frontier-index")) {
-            index += 1;
-            if (index == args.len) return error.MissingFrontierIndex;
-            frontier_index = try std.fmt.parseInt(usize, args[index], 10);
-        } else if (std.mem.eql(u8, arg, "--max-executables")) {
-            index += 1;
-            if (index == args.len) return error.MissingSearchLimit;
-            max_executables = try std.fmt.parseInt(usize, args[index], 10);
-            if (max_executables.? == 0) return error.InvalidSearchLimit;
-        } else if (std.mem.eql(u8, arg, "--max-composition-attempts")) {
-            index += 1;
-            if (index == args.len) return error.MissingSearchLimit;
-            max_composition_attempts = try std.fmt.parseInt(usize, args[index], 10);
-        } else if (std.mem.eql(u8, arg, "--zig")) {
-            index += 1;
-            if (index == args.len) return error.MissingZigPath;
-            zig = args[index];
-        } else if (std.mem.eql(u8, arg, "--zgc-root")) {
-            index += 1;
-            if (index == args.len) return error.MissingSourceRoot;
-            source_root = args[index];
-        } else if (std.mem.eql(u8, arg, "--cache-dir")) {
-            index += 1;
-            if (index == args.len) return error.MissingCachePath;
-            cache_dir = args[index];
-        } else if (std.mem.eql(u8, arg, "--cache-output")) {
-            cached_output = true;
-        } else if (std.mem.eql(u8, arg, "--inspectable")) {
-            inspectable = true;
-        } else if (std.mem.eql(u8, arg, "--bind-outputs")) {
-            bind_outputs = true;
-        } else if (std.mem.eql(u8, arg, "--name")) {
-            index += 1;
-            if (index == args.len) return error.MissingArtifactName;
-            requested_name = args[index];
-        } else if (std.mem.eql(u8, arg, "--artifact")) {
-            index += 1;
-            if (index == args.len) return error.MissingArtifactKind;
-            artifact_kind = std.meta.stringToEnum(ArtifactKind, args[index]) orelse return error.InvalidArtifactKind;
-        } else if (std.mem.eql(u8, arg, "--import")) {
-            index += 1;
-            if (index == args.len) return error.MissingImport;
-            const equal = std.mem.indexOfScalar(u8, args[index], '=') orelse return error.InvalidImport;
-            if (equal == 0 or equal + 1 == args[index].len) return error.InvalidImport;
-            try imports.append(allocator, .{ .name = args[index][0..equal], .path = args[index][equal + 1 ..] });
+        }
+        if (std.meta.stringToEnum(CompileOption, arg)) |option| {
+            switch (option) {
+                .@"-o", .@"--output" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingOutputPath;
+                    output = args[index];
+                },
+                .@"-O", .@"--optimize" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingOptimizeMode;
+                    optimize = std.meta.stringToEnum(OptimizeMode, args[index]) orelse return error.InvalidOptimizeMode;
+                },
+                .@"--target" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingTarget;
+                    target = args[index];
+                },
+                .@"--cpu" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingCpu;
+                    cpu = args[index];
+                },
+                .@"--selection-target" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingSelectionTarget;
+                    selection_target = std.meta.stringToEnum(zgc.OptimizationTarget, args[index]) orelse return error.InvalidSelectionTarget;
+                },
+                .@"--frontier-index" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingFrontierIndex;
+                    frontier_index = try std.fmt.parseInt(usize, args[index], 10);
+                },
+                .@"--max-executables" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingSearchLimit;
+                    max_executables = try std.fmt.parseInt(usize, args[index], 10);
+                    if (max_executables.? == 0) return error.InvalidSearchLimit;
+                },
+                .@"--max-composition-attempts" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingSearchLimit;
+                    max_composition_attempts = try std.fmt.parseInt(usize, args[index], 10);
+                },
+                .@"--zig" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingZigPath;
+                    zig = args[index];
+                },
+                .@"--zgc-root" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingSourceRoot;
+                    source_root = args[index];
+                },
+                .@"--cache-dir" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingCachePath;
+                    cache_dir = args[index];
+                },
+                .@"--cache-output" => cached_output = true,
+                .@"--inspectable" => inspectable = true,
+                .@"--bind-outputs" => bind_outputs = true,
+                .@"--name" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingArtifactName;
+                    requested_name = args[index];
+                },
+                .@"--artifact" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingArtifactKind;
+                    artifact_kind = std.meta.stringToEnum(ArtifactKind, args[index]) orelse return error.InvalidArtifactKind;
+                },
+                .@"--import" => {
+                    index += 1;
+                    if (index == args.len) return error.MissingImport;
+                    const equal = std.mem.indexOfScalar(u8, args[index], '=') orelse return error.InvalidImport;
+                    if (equal == 0 or equal + 1 == args[index].len) return error.InvalidImport;
+                    try imports.append(allocator, .{ .name = args[index][0..equal], .path = args[index][equal + 1 ..] });
+                },
+                .@"--time" => unreachable,
+            }
         } else if (arg.len != 0 and arg[0] == '-') {
             try stderr.print("unknown compile option: {s}\n", .{arg});
             return error.InvalidOption;
@@ -326,9 +360,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     if (!is_zgir and !std.mem.eql(u8, std.fs.path.extension(input_path), ".zig")) return error.ExpectedDefinition;
     if (is_zgir and imports.items.len != 0) return error.GraphDoesNotAcceptImports;
     if (!is_zgir and bind_outputs) return error.OutputBindingRequiresZgir;
-    if (!is_zgir and (!std.mem.eql(u8, selection_target, "balanced") or frontier_index != null or max_executables != null or max_composition_attempts != null)) return error.SelectionRequiresZgir;
-    if (!validOptimize(optimize)) return error.InvalidOptimizeMode;
-    if (!validSelectionTarget(selection_target)) return error.InvalidSelectionTarget;
+    if (!is_zgir and (selection_target != .balanced or frontier_index != null or max_executables != null or max_composition_attempts != null)) return error.SelectionRequiresZgir;
     if (cached_output and output != null) return error.ConflictingOutputOptions;
     if (requested_name) |name| {
         if (!validArtifactName(name)) return error.InvalidArtifactName;
@@ -352,10 +384,10 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         hasher.update(try std.Io.Dir.readFileAlloc(.cwd(), init.io, absolute_input, allocator, .limited(1024 * 1024 * 1024)));
         if (!is_zgir) hasher.update(absolute_input);
         hasher.update(absolute_root);
-        hasher.update(optimize);
+        hasher.update(@tagName(optimize));
         hasher.update(target orelse "native");
         hasher.update(cpu orelse "default-cpu");
-        hasher.update(selection_target);
+        hasher.update(@tagName(selection_target));
         hasher.update(search_text);
         hasher.update(zig);
         hasher.update(if (inspectable) "inspection:on" else "inspection:off");
@@ -390,7 +422,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         var digest: [32]u8 = undefined;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         hasher.update(graph);
-        hasher.update(selection_target);
+        hasher.update(@tagName(selection_target));
         hasher.update(search_text);
         hasher.update(frontier_text);
         hasher.update(if (bind_outputs) "outputs:bound" else "outputs:owned");
@@ -404,7 +436,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
         const configured_source_adapter = try std.fmt.allocPrint(
             allocator,
             "{s}\npub const executable_options = .{{ .target = .{s}, .frontier_index = {s}, .outputs = .{s}, .search = .{{ .max_executables = {d}, .max_composition_attempts = {d} }} }};\n",
-            .{ source_adapter, selection_target, frontier_text, if (bind_outputs) "bound" else "owned", max_executables orelse search_defaults.max_executables, max_composition_attempts orelse search_defaults.max_composition_attempts },
+            .{ source_adapter, @tagName(selection_target), frontier_text, if (bind_outputs) "bound" else "owned", max_executables orelse search_defaults.max_executables, max_composition_attempts orelse search_defaults.max_composition_attempts },
         );
         try work.writeFile(init.io, .{ .sub_path = "graph.zig", .data = configured_source_adapter });
         definition_path = try std.fs.path.join(allocator, &.{ work_path, "executable.zig" });
@@ -418,7 +450,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     const root_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "root.zig" });
     const inspect_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "zgc", "core", "inspect.zig" });
     const inspect_arg = try std.fmt.allocPrint(allocator, "-Mzgc_inspect_impl={s}", .{inspect_path});
-    const optimize_arg = try std.fmt.allocPrint(allocator, "-O{s}", .{optimize});
+    const optimize_arg = try std.fmt.allocPrint(allocator, "-O{s}", .{@tagName(optimize)});
     const root_arg = try std.fmt.allocPrint(allocator, "-Mroot={s}", .{abi_path});
     const executable_arg = try std.fmt.allocPrint(allocator, "-Mexecutable={s}", .{definition_path});
     const zgc_arg = try std.fmt.allocPrint(allocator, "-Mzgc={s}", .{root_path});
@@ -488,13 +520,6 @@ fn defaultOutput(allocator: std.mem.Allocator, input: []const u8, target_os: std
     return std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ if (kind == .static and target_os != .windows) "lib" else "", stem, suffix });
 }
 
-fn validOptimize(value: []const u8) bool {
-    return std.mem.eql(u8, value, "Debug") or
-        std.mem.eql(u8, value, "ReleaseSafe") or
-        std.mem.eql(u8, value, "ReleaseFast") or
-        std.mem.eql(u8, value, "ReleaseSmall");
-}
-
 fn validArtifactName(name: []const u8) bool {
     if (name.len == 0 or name[0] == '.') return false;
     for (name) |byte| {
@@ -503,15 +528,8 @@ fn validArtifactName(name: []const u8) bool {
     return true;
 }
 
-fn validSelectionTarget(value: []const u8) bool {
-    return std.mem.eql(u8, value, "balanced") or
-        std.mem.eql(u8, value, "memory") or
-        std.mem.eql(u8, value, "fast") or
-        std.mem.eql(u8, value, "small");
-}
-
 fn isHelp(arg: []const u8) bool {
-    return std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help");
+    return std.meta.stringToEnum(HelpAlias, arg) != null;
 }
 
 fn usage(writer: *std.Io.Writer) !void {
