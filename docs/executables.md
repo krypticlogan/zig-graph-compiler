@@ -31,6 +31,29 @@ its exported ABI functions. `zgc inspect` and `zgc time` load shared libraries,
 not static archives or standalone binaries. Use `--inspectable` when the
 artifact needs the inspection export.
 
+## WebAssembly
+
+Target `wasm32-freestanding` to emit a browser-loadable `.wasm` module. This
+target selects the `wasm` artifact automatically; `--artifact wasm` is also
+accepted. A WASM shared library is not supported.
+
+```sh
+zgc compile graph.zgir --target wasm32-freestanding -o graph.wasm
+```
+
+The module has no entry point or imports. It exports linear `memory`, the
+versioned executable ABI, `zgc_wasm_alloc`, and `zgc_wasm_free`. JavaScript
+allocates buffers inside that memory, writes source data there, then calls
+`zgc_runtime_init`, source binding/copy functions, `zgc_runtime_run`, and
+output view/copy functions. Allocate runtime storage with
+`zgc_runtime_size()` and `zgc_runtime_alignment()`. Call
+`zgc_runtime_deinit` before releasing it; release other allocated buffers
+when no longer needed. Recreate typed-array views after memory grows.
+
+`--inspectable` adds `zgc_executable_inspect` to the WASM exports. The native
+`zgc inspect` and `zgc time` commands load shared libraries, not `.wasm`
+modules.
+
 The default optimization mode is `ReleaseFast`. Select another mode, Zig
 executable, target, CPU model, or source checkout explicitly when needed:
 

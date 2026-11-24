@@ -105,6 +105,12 @@ zgc_status zgc_runtime_init(void *storage, size_t storage_size);
 void zgc_runtime_deinit(void *storage);
 zgc_status zgc_runtime_run(void *storage);
 
+/* Exported by wasm32-freestanding artifacts for buffers in linear memory. */
+#if defined(__wasm__)
+void *zgc_wasm_alloc(size_t byte_count, size_t alignment);
+void zgc_wasm_free(void *pointer, size_t byte_count, size_t alignment);
+#endif
+
 size_t zgc_executable_source_count(void);
 zgc_status zgc_executable_get_source_descriptor(size_t source_index, zgc_source_descriptor *out);
 zgc_status zgc_runtime_copy_source(

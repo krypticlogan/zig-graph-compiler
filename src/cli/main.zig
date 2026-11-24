@@ -236,9 +236,33 @@ const ArtifactKind = enum {
     shared,
     static,
     executable,
+    wasm,
 };
 
-/// Compiles a .zgir or Zig definition into a native library or executable.
+const wasm_exports = [_][]const u8{
+    "zgc_abi_version",
+    "zgc_executable_structural_fingerprint",
+    "zgc_runtime_size",
+    "zgc_runtime_alignment",
+    "zgc_runtime_mutable_bytes",
+    "zgc_runtime_init",
+    "zgc_runtime_deinit",
+    "zgc_runtime_run",
+    "zgc_executable_source_count",
+    "zgc_executable_get_source_descriptor",
+    "zgc_runtime_copy_source",
+    "zgc_runtime_bind_source",
+    "zgc_executable_output_count",
+    "zgc_executable_get_output_descriptor",
+    "zgc_executable_get_output_binding",
+    "zgc_runtime_bind_output",
+    "zgc_runtime_output_view",
+    "zgc_runtime_copy_output",
+    "zgc_wasm_alloc",
+    "zgc_wasm_free",
+};
+
+/// Compiles a .zgir or Zig definition into a native or WebAssembly artifact.
 fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *std.Io.Writer) !?[]const u8 {
     const allocator = init.arena.allocator();
     var input: ?[]const u8 = null;
@@ -258,6 +282,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     var bind_outputs = false;
     var requested_name: ?[]const u8 = null;
     var artifact_kind: ArtifactKind = .shared;
+    var artifact_kind_explicit = false;
     var imports: std.ArrayList(DefinitionImport) = .empty;
 
     var index: usize = 0;
@@ -337,6 +362,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
                     index += 1;
                     if (index == args.len) return error.MissingArtifactKind;
                     artifact_kind = std.meta.stringToEnum(ArtifactKind, args[index]) orelse return error.InvalidArtifactKind;
+                    artifact_kind_explicit = true;
                 },
                 .@"--import" => {
                     index += 1;
@@ -373,10 +399,14 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     cache_directory.close(init.io);
     const absolute_input = try std.fs.path.resolve(allocator, &.{ cwd, input_path });
     const absolute_root = try std.fs.path.resolve(allocator, &.{ cwd, source_root });
-    const target_os = if (target) |triple|
-        (try std.Target.Query.parse(.{ .arch_os_abi = triple })).os_tag orelse builtin.os.tag
-    else
-        builtin.os.tag;
+    const target_query = if (target) |triple| try std.Target.Query.parse(.{ .arch_os_abi = triple }) else null;
+    const target_os = if (target_query) |query| query.os_tag orelse builtin.os.tag else builtin.os.tag;
+    const target_arch = if (target_query) |query| query.cpu_arch orelse builtin.cpu.arch else builtin.cpu.arch;
+    const browser_wasm = target_arch == .wasm32 and target_os == .freestanding;
+    if (browser_wasm) {
+        if (!artifact_kind_explicit or artifact_kind == .executable) artifact_kind = .wasm;
+        if (artifact_kind == .shared) return error.WasmSharedLibraryUnsupported;
+    } else if (artifact_kind == .wasm) return error.WasmTargetRequired;
     const search_text = try std.fmt.allocPrint(allocator, "search:{d}:{d}", .{ max_executables orelse search_defaults.max_executables, max_composition_attempts orelse search_defaults.max_composition_attempts });
     const output_path = if (cached_output) blk: {
         var digest: [32]u8 = undefined;
@@ -445,6 +475,7 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     const artifact_root = switch (artifact_kind) {
         .shared, .static => if (inspectable) "inspectable_executable_abi.zig" else "executable_abi.zig",
         .executable => if (inspectable) "inspectable_executable_runner.zig" else "executable_runner.zig",
+        .wasm => if (inspectable) "inspectable_wasm_executable_abi.zig" else "wasm_executable_abi.zig",
     };
     const abi_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "artifact", artifact_root });
     const root_path = try std.fs.path.join(allocator, &.{ absolute_root, "src", "root.zig" });
@@ -456,9 +487,16 @@ fn compileArtifact(init: std.process.Init, args: []const []const u8, stderr: *st
     const zgc_arg = try std.fmt.allocPrint(allocator, "-Mzgc={s}", .{root_path});
     const output_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{absolute_output});
     var command: std.ArrayList([]const u8) = .empty;
-    try command.appendSlice(allocator, &.{ zig, if (artifact_kind == .executable) "build-exe" else "build-lib", optimize_arg });
+    try command.appendSlice(allocator, &.{ zig, if (artifact_kind == .executable or artifact_kind == .wasm) "build-exe" else "build-lib", optimize_arg });
     if (artifact_kind == .shared) try command.append(allocator, "-dynamic");
     if (artifact_kind == .static) try command.append(allocator, "-static");
+    if (artifact_kind == .wasm) {
+        try command.appendSlice(allocator, &.{ "-fno-entry", "--export-memory" });
+        for (wasm_exports) |name| {
+            try command.append(allocator, try std.fmt.allocPrint(allocator, "--export={s}", .{name}));
+        }
+        if (inspectable) try command.append(allocator, "--export=zgc_executable_inspect");
+    }
     if (artifact_kind == .shared and target_os == .linux) {
         try command.append(allocator, try std.fmt.allocPrint(
             allocator,
@@ -516,6 +554,7 @@ fn defaultOutput(allocator: std.mem.Allocator, input: []const u8, target_os: std
         },
         .static => if (target_os == .windows) ".lib" else ".a",
         .executable => if (target_os == .windows) ".exe" else "",
+        .wasm => ".wasm",
     };
     return std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ if (kind == .static and target_os != .windows) "lib" else "", stem, suffix });
 }
@@ -537,7 +576,7 @@ fn usage(writer: *std.Io.Writer) !void {
         \\usage: zgc <command> [options]
         \\
         \\commands:
-        \\  compile    specialize a .zgir or Zig definition and emit a native artifact
+        \\  compile    specialize a .zgir or Zig definition and emit an artifact
         \\  inspect    show metadata and graph representations from a shared library
         \\  time       measure a compiled executable runtime
         \\  cache      show or clear the native compiler cache
@@ -569,7 +608,7 @@ fn compileUsage(writer: *std.Io.Writer) !void {
         \\
         \\options:
         \\  -o, --output <path>      output artifact path
-        \\  --artifact <kind>        shared (default), static, or executable
+        \\  --artifact <kind>        shared (native default), static, executable, or wasm (wasm32-freestanding default)
         \\  -O, --optimize <mode>   Debug, ReleaseSafe, ReleaseFast, or ReleaseSmall
         \\  --target <triple>        Zig compilation target
         \\  --cpu <model>            Zig CPU model and features (for example, cortex_m0plus)

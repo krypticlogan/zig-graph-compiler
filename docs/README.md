@@ -16,8 +16,8 @@ Run `zig build docs` to generate the Zig API reference at
   model representations to a writer.
 - [Compilation diagnostics](compile-diagnostics.md) — comptime stage logs,
   checkpoints, and compiler time/memory probes.
-- [Generated model artifacts](executables.md) — opaque model lifecycle,
-  versioned C ABI, libraries, and minimal executables.
+- [Generated executables](executables.md) — runtime lifecycle, versioned ABI,
+  native artifacts, and WebAssembly modules.
 - [Serialized graphs](zgir.md) — `.zgir` syntax, operations, and compilation.
 - [Python compiler package](executables.md#python-compiler) — external Zig
   toolchains, compiled-model caching, and the runtime/compiler boundary.
