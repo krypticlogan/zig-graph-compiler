@@ -52,7 +52,8 @@ when no longer needed. Recreate typed-array views after memory grows.
 
 `--inspectable` adds `zgc_executable_inspect` to the WASM exports. The native
 `zgc inspect` and `zgc time` commands load shared libraries, not `.wasm`
-modules.
+modules. The [JavaScript/TypeScript runtime](../bindings/js/README.md) wraps
+allocation, source binding, execution, and output copying.
 
 The default optimization mode is `ReleaseFast`. Select another mode, Zig
 executable, target, CPU model, or source checkout explicitly when needed:

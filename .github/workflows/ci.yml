@@ -38,3 +38,13 @@ jobs:
           python-version: '3.12'
       - name: Test C and Python bindings
         run: zig build test-bindings -Dpython=python
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test JavaScript and TypeScript bindings
+        run: |
+          npm ci --prefix bindings/js
+          npm run build --prefix bindings/js
+          ./zig-out/bin/zgc compile bindings/tests/fixtures/smoke.zgir --target wasm32-freestanding --bind-outputs -o "$RUNNER_TEMP/zgc-smoke.wasm"
+          npm test --prefix bindings/js -- "$RUNNER_TEMP/zgc-smoke.wasm"
